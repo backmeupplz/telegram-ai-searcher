@@ -39,6 +39,7 @@ async function searxng(query: string): Promise<SearxngRawResult[]> {
   url.searchParams.set('q', query)
   url.searchParams.set('format', 'json')
   url.searchParams.set('safesearch', '0')
+  url.searchParams.set('engines', 'google,bing,duckduckgo,startpage,qwant')
 
   const res = await queryWithTimeout(
     url.toString(),
