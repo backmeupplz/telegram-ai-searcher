@@ -1,5 +1,5 @@
 import { autoRetry } from '@grammyjs/auto-retry'
-import { run, sequentialize } from '@grammyjs/runner'
+import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
 import { Bot, type Context } from 'grammy'
 import { answer, type BotEvent, type ImageInput } from './ai'
@@ -225,12 +225,37 @@ bot.catch((err) => {
 
 await bot.init()
 console.log(`telegram-ai-searcher online as @${bot.botInfo.username}`)
-const runner = run(bot)
+
+let shuttingDown = false
+let currentRunner: RunnerHandle | null = null
 
 const shutdown = async (signal: string) => {
+  if (shuttingDown) return
+  shuttingDown = true
   console.log(`received ${signal}, stopping runner…`)
-  if (runner.isRunning()) await runner.stop()
+  if (currentRunner?.isRunning()) {
+    await currentRunner.stop().catch(() => undefined)
+  }
   process.exit(0)
 }
 process.once('SIGINT', () => shutdown('SIGINT'))
 process.once('SIGTERM', () => shutdown('SIGTERM'))
+
+// Telegram returns 409 Conflict while another getUpdates session is still held
+// open on their side — typically for ~50s after a redeploy. grammY's runner
+// treats 409 as unrecoverable and rejects its task, so we wrap it in a restart
+// loop with backoff instead of letting the process exit.
+let backoffMs = 2_000
+while (!shuttingDown) {
+  currentRunner = run(bot)
+  const task = currentRunner.task()
+  try {
+    if (task) await task
+    backoffMs = 2_000
+  } catch (err) {
+    console.error('[runner] crashed, will restart:', err)
+  }
+  if (shuttingDown) break
+  await new Promise((r) => setTimeout(r, backoffMs))
+  backoffMs = Math.min(backoffMs * 2, 60_000)
+}
