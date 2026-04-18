@@ -7,6 +7,7 @@
       "dependencies": {
         "@ai-sdk/openai-compatible": "^1.0.18",
         "@grammyjs/auto-retry": "^2.0.2",
+        "@grammyjs/runner": "^2.0.3",
         "@grammyjs/stream": "^1.0.1",
         "@mozilla/readability": "^0.5.0",
         "ai": "^5.0.0",
@@ -43,6 +44,8 @@
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@3.0.4", "", {}, "sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw=="],
 
     "@grammyjs/auto-retry": ["@grammyjs/auto-retry@2.0.2", "", { "dependencies": { "debug": "^4.3.4" }, "peerDependencies": { "grammy": "^1.10.0" } }, "sha512-b4A4p5jlYDiQtW0c0FXYe11WMkYoiW+5rvOaDMCOk1h7Pu2SDl7B7gmFF8cthWCx2+M2nWLOsBxAgbBG4kKWYg=="],
+
+    "@grammyjs/runner": ["@grammyjs/runner@2.0.3", "", { "dependencies": { "abort-controller": "^3.0.0" }, "peerDependencies": { "grammy": "^1.13.1" } }, "sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A=="],
 
     "@grammyjs/stream": ["@grammyjs/stream@1.0.1", "", { "dependencies": { "abort-controller": "^3.0.0" }, "peerDependencies": { "grammy": "^1.39.0" } }, "sha512-L1hKvKdI1odWa2mRzfcEP8TdZPjgzHaATE2t2SFpSyikXCViVIEzKjZcM6tDRZFce4uzqckkN5tRM8WPW/1BUg=="],
 

@@ -1,4 +1,5 @@
 import { autoRetry } from '@grammyjs/auto-retry'
+import { run, sequentialize } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
 import { Bot, type Context } from 'grammy'
 import { answer, type BotEvent } from './ai'
@@ -11,6 +12,7 @@ type AppContext = StreamFlavor<Context>
 const bot = new Bot<AppContext>(env.TELEGRAM_BOT_TOKEN)
 
 bot.api.config.use(autoRetry())
+bot.use(sequentialize((ctx) => ctx.chat?.id.toString()))
 bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
@@ -152,6 +154,6 @@ bot.catch((err) => {
   console.error('bot error:', err.error)
 })
 
-await bot.start({
-  onStart: (me) => console.log(`telegram-ai-searcher online as @${me.username}`),
-})
+await bot.init()
+console.log(`telegram-ai-searcher online as @${bot.botInfo.username}`)
+run(bot)
