@@ -134,14 +134,22 @@ export async function* answer(
     },
   })
 
-  let sawToolCallThisStep = false
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  let hasEmittedText = false
+  let stepQueries: string[] = []
+  let pendingSeparatorQueries: string[] | null = null
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'start-step') {
-      sawToolCallThisStep = false
+      if (hasEmittedText && stepQueries.length > 0) {
+        pendingSeparatorQueries = stepQueries
+      }
+      stepQueries = []
     } else if (chunk.type === 'tool-call' && chunk.toolName === 'web_search') {
-      sawToolCallThisStep = true
       const query =
         (chunk as unknown as { input?: { query?: string } }).input?.query ?? ''
+      stepQueries.push(query)
       yield {
         kind: 'status',
         text: `🔎 Searching the web for "${truncate(query, 80)}"…`,
@@ -149,10 +157,15 @@ export async function* answer(
     } else if (chunk.type === 'tool-result') {
       yield { kind: 'status', text: '🧠 Generating response…' }
     } else if (chunk.type === 'text-delta') {
-      if (!sawToolCallThisStep) {
-        // Model produced text without searching on this step
+      if (pendingSeparatorQueries) {
+        const list = pendingSeparatorQueries
+          .map((q) => `"${escapeHtml(truncate(q, 80))}"`)
+          .join(', ')
+        yield { kind: 'text', delta: `\n\n<i>🔎 ${list}</i>\n\n` }
+        pendingSeparatorQueries = null
       }
       yield { kind: 'text', delta: chunk.text }
+      hasEmittedText = true
     }
   }
 }
