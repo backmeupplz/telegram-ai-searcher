@@ -2,6 +2,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { stepCountIs, streamText, tool } from 'ai'
 import { z } from 'zod'
 import { env } from './env'
+import type { ReplyContext } from './mention'
 import { webSearch } from './search'
 
 const fireworks = createOpenAICompatible({
@@ -44,11 +45,22 @@ function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value
 }
 
-export async function* answer(question: string): AsyncGenerator<BotEvent> {
+function buildPrompt(question: string, replyContext: ReplyContext | null): string {
+  if (!replyContext) return question
+  const label = replyContext.isBot
+    ? 'Your previous message (that the user is replying to)'
+    : `Message from ${replyContext.author} (that the user is replying to)`
+  return `${label}:\n"""\n${replyContext.text}\n"""\n\nUser's question:\n${question}`
+}
+
+export async function* answer(
+  question: string,
+  replyContext: ReplyContext | null = null,
+): AsyncGenerator<BotEvent> {
   const result = streamText({
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
-    prompt: question,
+    prompt: buildPrompt(question, replyContext),
     stopWhen: stepCountIs(5),
     tools: {
       web_search: tool({

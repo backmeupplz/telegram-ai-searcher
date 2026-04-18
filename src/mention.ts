@@ -1,19 +1,33 @@
 import type { Context } from 'grammy'
 
+export type ReplyContext = {
+  author: string
+  isBot: boolean
+  text: string
+}
+
 export type Trigger = {
   triggered: boolean
   cleanedText: string
+  replyContext: ReplyContext | null
 }
 
 export function detectTrigger(ctx: Context): Trigger {
   const message = ctx.message
   const text = message?.text ?? message?.caption ?? ''
-  if (!message || !text.trim()) {
-    return { triggered: false, cleanedText: '' }
+  const empty: Trigger = {
+    triggered: false,
+    cleanedText: '',
+    replyContext: null,
   }
+  if (!message || !text.trim()) return empty
 
   if (ctx.chat?.type === 'private') {
-    return { triggered: true, cleanedText: text.trim() }
+    return {
+      triggered: true,
+      cleanedText: text.trim(),
+      replyContext: extractReplyContext(ctx),
+    }
   }
 
   const botId = ctx.me.id
@@ -39,11 +53,28 @@ export function detectTrigger(ctx: Context): Trigger {
     }
   }
 
-  if (!mentioned && !repliedToBot) {
-    return { triggered: false, cleanedText: '' }
-  }
+  if (!mentioned && !repliedToBot) return empty
 
-  return { triggered: true, cleanedText: cleaned.replace(/\s+/g, ' ').trim() }
+  return {
+    triggered: true,
+    cleanedText: cleaned.replace(/\s+/g, ' ').trim(),
+    replyContext: extractReplyContext(ctx),
+  }
+}
+
+function extractReplyContext(ctx: Context): ReplyContext | null {
+  const reply = ctx.message?.reply_to_message
+  if (!reply) return null
+  const text = reply.text ?? reply.caption ?? ''
+  if (!text.trim()) return null
+  const from = reply.from
+  const isBot = from?.id === ctx.me.id
+  const author = isBot
+    ? 'the assistant (you)'
+    : from?.username
+      ? `@${from.username}`
+      : (from?.first_name ?? 'someone')
+  return { author, isBot, text: text.trim() }
 }
 
 function stripSlice(text: string, offset: number, length: number): string {

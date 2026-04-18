@@ -19,7 +19,7 @@ const GROUP_EDIT_INTERVAL_MS = 1500
 const GROUP_MIN_FIRST_EDIT_CHARS = 15
 
 bot.on('message', async (ctx) => {
-  const { triggered, cleanedText } = detectTrigger(ctx)
+  const { triggered, cleanedText, replyContext } = detectTrigger(ctx)
   if (!triggered || !cleanedText) return
 
   const chatId = ctx.chat.id
@@ -52,7 +52,7 @@ bot.on('message', async (ctx) => {
   try {
     await setStatus('🤔 Thinking…')
 
-    const iterator = answer(cleanedText)[Symbol.asyncIterator]()
+    const iterator = answer(cleanedText, replyContext)[Symbol.asyncIterator]()
     let firstDelta: string | null = null
     while (true) {
       const step = await iterator.next()
