@@ -9,6 +9,12 @@ export type SearchResult = {
   content: string
 }
 
+export type FetchedPage = {
+  url: string
+  title: string
+  content: string
+}
+
 type SearxngRawResult = {
   title?: string
   url?: string
@@ -53,7 +59,9 @@ async function searxng(query: string): Promise<SearxngRawResult[]> {
   return data.results ?? []
 }
 
-async function extractReadable(url: string): Promise<string> {
+async function extractReadable(
+  url: string,
+): Promise<{ title: string; content: string }> {
   const res = await queryWithTimeout(
     url,
     { headers: { 'User-Agent': USER_AGENT } },
@@ -69,7 +77,24 @@ async function extractReadable(url: string): Promise<string> {
   const article = new Readability(dom.window.document).parse()
   const text = article?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
   if (!text) throw new Error('no readable content')
-  return text.slice(0, MAX_CONTENT_CHARS)
+  return {
+    title: article?.title?.trim() ?? '',
+    content: text.slice(0, MAX_CONTENT_CHARS),
+  }
+}
+
+export async function fetchUrl(rawUrl: string): Promise<FetchedPage> {
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    throw new Error(`invalid URL: ${rawUrl}`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`unsupported protocol: ${parsed.protocol}`)
+  }
+  const { title, content } = await extractReadable(parsed.toString())
+  return { url: parsed.toString(), title, content }
 }
 
 export async function webSearch(query: string): Promise<SearchResult[]> {
@@ -84,7 +109,7 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
     top.map(async (r) => {
       let content = ''
       try {
-        content = await extractReadable(r.url)
+        content = (await extractReadable(r.url)).content
       } catch {
         content = r.content ?? ''
       }

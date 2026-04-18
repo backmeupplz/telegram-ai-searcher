@@ -3,7 +3,7 @@ import { stepCountIs, streamText, tool, type ModelMessage } from 'ai'
 import { z } from 'zod'
 import { env } from './env'
 import type { ReplyContext } from './mention'
-import { webSearch } from './search'
+import { fetchUrl, webSearch } from './search'
 
 const fireworks = createOpenAICompatible({
   name: 'fireworks',
@@ -27,7 +27,9 @@ CRITICAL rules for FORMULATING the web_search query:
 3. If the topic is time-sensitive, include a year or "latest"/"current" in the query (today is ${new Date().toISOString().slice(0, 10)} — year 2026).
 4. If early search results surface names or version numbers you didn't expect, TRUST the search results and refine follow-up queries using those — do NOT fall back to pretrained knowledge.
 
-Cite sources inline with a link tag whose href is the EXACT full URL returned by web_search (including path, query string, anchors) and whose visible text is just the domain. Example: if web_search returned https://www.medium.com/@user/why-opus-wins-abc123, cite it as <a href="https://www.medium.com/@user/why-opus-wins-abc123">medium.com</a> — never shorten the href to the bare domain. If the search returns nothing useful, say so instead of guessing.
+When the user pastes a URL directly, or when you already know the exact page to read (e.g. from a prior search result and you want more of its content), call the fetch_url tool instead of searching — it returns the readable text of that single page. Only http(s) URLs are supported.
+
+Cite sources inline with a link tag whose href is the EXACT full URL returned by web_search or fetch_url (including path, query string, anchors) and whose visible text is just the domain. Example: if web_search returned https://www.medium.com/@user/why-opus-wins-abc123, cite it as <a href="https://www.medium.com/@user/why-opus-wins-abc123">medium.com</a> — never shorten the href to the bare domain. If the search returns nothing useful, say so instead of guessing.
 Keep answers compact and conversational; this is a chat, not an essay.
 
 Formatting rules (IMPORTANT — the message is rendered with Telegram HTML parse mode):
@@ -131,6 +133,29 @@ export async function* answer(
           }
         },
       }),
+      fetch_url: tool({
+        description:
+          'Fetch a single http(s) URL and return its readable text content. Use this when the user pastes a specific link, or when you already know the exact page you want to read and do not need a search. Only http and https are allowed.',
+        inputSchema: z.object({
+          url: z
+            .string()
+            .url()
+            .describe('The full http(s) URL to fetch.'),
+        }),
+        execute: async ({ url }) => {
+          console.log(`[fetch_url] ${url}`)
+          try {
+            const page = await fetchUrl(url)
+            console.log(`[fetch_url] -> ${page.content.length} chars`)
+            return page
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            console.log(`[fetch_url] ERROR: ${message}`)
+            return { url, title: '', content: '', error: message }
+          }
+        },
+      }),
     },
   })
 
@@ -138,31 +163,44 @@ export async function* answer(
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   let hasEmittedText = false
-  let stepQueries: string[] = []
-  let pendingSeparatorQueries: string[] | null = null
+  let stepLabels: Array<{ icon: string; text: string }> = []
+  let pendingSeparatorLabels: Array<{ icon: string; text: string }> | null =
+    null
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'start-step') {
-      if (hasEmittedText && stepQueries.length > 0) {
-        pendingSeparatorQueries = stepQueries
+      if (hasEmittedText && stepLabels.length > 0) {
+        pendingSeparatorLabels = stepLabels
       }
-      stepQueries = []
+      stepLabels = []
     } else if (chunk.type === 'tool-call' && chunk.toolName === 'web_search') {
       const query =
         (chunk as unknown as { input?: { query?: string } }).input?.query ?? ''
-      stepQueries.push(query)
+      stepLabels.push({ icon: '🔎', text: `"${truncate(query, 80)}"` })
       yield {
         kind: 'status',
         text: `🔎 Searching the web for "${truncate(query, 80)}"…`,
       }
+    } else if (chunk.type === 'tool-call' && chunk.toolName === 'fetch_url') {
+      const url =
+        (chunk as unknown as { input?: { url?: string } }).input?.url ?? ''
+      let host = url
+      try {
+        host = new URL(url).host
+      } catch {}
+      stepLabels.push({ icon: '📄', text: host })
+      yield {
+        kind: 'status',
+        text: `📄 Fetching ${truncate(host, 80)}…`,
+      }
     } else if (chunk.type === 'tool-result') {
       yield { kind: 'status', text: '🧠 Generating response…' }
     } else if (chunk.type === 'text-delta') {
-      if (pendingSeparatorQueries) {
-        const list = pendingSeparatorQueries
-          .map((q) => `"${escapeHtml(truncate(q, 80))}"`)
+      if (pendingSeparatorLabels) {
+        const list = pendingSeparatorLabels
+          .map((l) => `${l.icon} ${escapeHtml(l.text)}`)
           .join(', ')
-        yield { kind: 'text', delta: `\n\n<i>🔎 ${list}</i>\n\n` }
-        pendingSeparatorQueries = null
+        yield { kind: 'text', delta: `\n\n<i>${list}</i>\n\n` }
+        pendingSeparatorLabels = null
       }
       yield { kind: 'text', delta: chunk.text }
       hasEmittedText = true
