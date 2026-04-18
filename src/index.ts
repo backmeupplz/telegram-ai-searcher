@@ -13,12 +13,15 @@ const bot = new Bot<AppContext>(env.TELEGRAM_BOT_TOKEN)
 bot.api.config.use(autoRetry())
 bot.use(stream())
 
+const GROUP_EDIT_INTERVAL_MS = 1500
+
 bot.on('message', async (ctx) => {
   const { triggered, cleanedText } = detectTrigger(ctx)
   if (!triggered || !cleanedText) return
 
   const chatId = ctx.chat.id
   const replyToId = ctx.message.message_id
+  const isPrivate = ctx.chat.type === 'private'
 
   await ctx.replyWithChatAction('typing').catch(() => undefined)
 
@@ -65,13 +68,6 @@ bot.on('message', async (ctx) => {
       return
     }
 
-    if (statusMsgId !== null) {
-      await ctx.api
-        .deleteMessage(chatId, statusMsgId)
-        .catch(() => undefined)
-      statusMsgId = null
-    }
-
     const initial = firstDelta
     const textStream = (async function* () {
       yield initial
@@ -83,15 +79,52 @@ bot.on('message', async (ctx) => {
       }
     })()
 
-    await ctx.replyWithStream(
-      safeHtmlStream(textStream),
-      { parse_mode: 'HTML' },
-      {
-        parse_mode: 'HTML',
-        reply_parameters: { message_id: replyToId },
-        link_preview_options: { is_disabled: true },
-      },
-    )
+    if (isPrivate) {
+      // Draft-based streaming only works in private chats
+      if (statusMsgId !== null) {
+        await ctx.api
+          .deleteMessage(chatId, statusMsgId)
+          .catch(() => undefined)
+        statusMsgId = null
+      }
+      await ctx.replyWithStream(
+        safeHtmlStream(textStream),
+        { parse_mode: 'HTML' },
+        {
+          parse_mode: 'HTML',
+          reply_parameters: { message_id: replyToId },
+          link_preview_options: { is_disabled: true },
+        },
+      )
+    } else {
+      // Groups: reuse the status message and edit-stream the answer into it
+      let accumulated = ''
+      let lastEditAt = 0
+      for await (const piece of safeHtmlStream(textStream)) {
+        accumulated += piece
+        const now = Date.now()
+        if (
+          statusMsgId !== null &&
+          now - lastEditAt >= GROUP_EDIT_INTERVAL_MS
+        ) {
+          lastEditAt = now
+          await ctx.api
+            .editMessageText(chatId, statusMsgId, accumulated, {
+              parse_mode: 'HTML',
+              link_preview_options: { is_disabled: true },
+            })
+            .catch(() => undefined)
+        }
+      }
+      if (accumulated && statusMsgId !== null) {
+        await ctx.api
+          .editMessageText(chatId, statusMsgId, accumulated, {
+            parse_mode: 'HTML',
+            link_preview_options: { is_disabled: true },
+          })
+          .catch(() => undefined)
+      }
+    }
   } catch (error) {
     console.error('reply failed:', error)
     const msg = `Sorry, something went wrong: ${
