@@ -1,5 +1,5 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { stepCountIs, streamText, tool } from 'ai'
+import { stepCountIs, streamText, tool, type ModelMessage } from 'ai'
 import { z } from 'zod'
 import { env } from './env'
 import type { ReplyContext } from './mention'
@@ -41,26 +41,66 @@ export type BotEvent =
   | { kind: 'status'; text: string }
   | { kind: 'text'; delta: string }
 
+export type ImageInput = {
+  url: string
+  mediaType?: string
+  source: 'trigger' | 'reply'
+}
+
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value
 }
 
-function buildPrompt(question: string, replyContext: ReplyContext | null): string {
-  if (!replyContext) return question
-  const label = replyContext.isBot
-    ? 'Your previous message (that the user is replying to)'
-    : `Message from ${replyContext.author} (that the user is replying to)`
-  return `${label}:\n"""\n${replyContext.text}\n"""\n\nUser's question:\n${question}`
+function buildMessages(
+  question: string,
+  replyContext: ReplyContext | null,
+  image: ImageInput | null,
+): ModelMessage[] {
+  const parts: Array<
+    | { type: 'text'; text: string }
+    | { type: 'image'; image: URL; mediaType?: string }
+  > = []
+
+  if (replyContext) {
+    const label = replyContext.isBot
+      ? 'Your previous message (that the user is replying to)'
+      : `Message from ${replyContext.author} (that the user is replying to)`
+    const body = replyContext.text
+      ? `${label}:\n"""\n${replyContext.text}\n"""`
+      : `${label} (image only, see attached)`
+    parts.push({ type: 'text', text: body })
+  }
+
+  if (image) {
+    const note =
+      image.source === 'trigger'
+        ? "Image attached to the user's message:"
+        : 'Image from the replied-to message:'
+    parts.push({ type: 'text', text: note })
+    parts.push({
+      type: 'image',
+      image: new URL(image.url),
+      mediaType: image.mediaType,
+    })
+  }
+
+  parts.push({
+    type: 'text',
+    text: question ? `User's question:\n${question}` : "User's question: (see image)",
+  })
+
+  return [{ role: 'user', content: parts }]
 }
 
 export async function* answer(
   question: string,
   replyContext: ReplyContext | null = null,
+  image: ImageInput | null = null,
 ): AsyncGenerator<BotEvent> {
   const result = streamText({
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
-    prompt: buildPrompt(question, replyContext),
+    messages: buildMessages(question, replyContext, image),
     stopWhen: stepCountIs(5),
     tools: {
       web_search: tool({

@@ -2,7 +2,7 @@ import { autoRetry } from '@grammyjs/auto-retry'
 import { run, sequentialize } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
 import { Bot, type Context } from 'grammy'
-import { answer, type BotEvent } from './ai'
+import { answer, type BotEvent, type ImageInput } from './ai'
 import { env } from './env'
 import { detectTrigger } from './mention'
 import { safeHtmlStream } from './safe-html'
@@ -18,9 +18,66 @@ bot.use(stream())
 const GROUP_EDIT_INTERVAL_MS = 1500
 const GROUP_MIN_FIRST_EDIT_CHARS = 15
 
+const START_MESSAGE = `👋 I'm a Telegram bot that answers questions by searching the web and streaming the reply live.
+
+<b>What I do</b>
+- Search the web via a self-hosted SearXNG instance
+- Fetch and read the top results before replying
+- Stream the answer token-by-token, with inline source links
+- Understand images you send or reply to
+
+<b>How to use me</b>
+- In private chat: just send a question or an image
+- In groups: @mention me or reply to one of my messages
+- Reply to any message with a question and I'll use it as context
+- Write in any language — I'll reply in the same one
+
+I am <b>not</b> ChatGPT, Claude, Gemini, or any other specific assistant — I'm a thin wrapper around whatever open model is configured on the server (currently via Fireworks AI). Source: <a href="https://github.com/backmeupplz/telegram-ai-searcher">github.com/backmeupplz/telegram-ai-searcher</a>`
+
+bot.command('start', async (ctx) => {
+  await ctx
+    .reply(START_MESSAGE, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    })
+    .catch(() => undefined)
+})
+
+async function resolveImage(
+  ctx: AppContext,
+  fileId: string,
+  source: 'trigger' | 'reply',
+): Promise<ImageInput | null> {
+  try {
+    const file = await ctx.api.getFile(fileId)
+    if (!file.file_path) return null
+    const url = `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`
+    const extension = file.file_path.split('.').pop()?.toLowerCase()
+    const mediaType =
+      extension === 'png'
+        ? 'image/png'
+        : extension === 'webp'
+          ? 'image/webp'
+          : extension === 'gif'
+            ? 'image/gif'
+            : 'image/jpeg'
+    return { url, mediaType, source }
+  } catch (error) {
+    console.error('getFile failed:', error)
+    return null
+  }
+}
+
 bot.on('message', async (ctx) => {
-  const { triggered, cleanedText, replyContext } = detectTrigger(ctx)
-  if (!triggered || !cleanedText) return
+  const {
+    triggered,
+    cleanedText,
+    replyContext,
+    imageFileId,
+  } = detectTrigger(ctx)
+  if (!triggered) return
+  const replyImageFileId = replyContext?.imageFileId ?? null
+  if (!cleanedText && !imageFileId && !replyImageFileId) return
 
   const chatId = ctx.chat.id
   const replyToId = ctx.message.message_id
@@ -52,7 +109,19 @@ bot.on('message', async (ctx) => {
   try {
     await setStatus('🤔 Thinking…')
 
-    const iterator = answer(cleanedText, replyContext)[Symbol.asyncIterator]()
+    const chosenFileId = imageFileId ?? replyImageFileId
+    const chosenSource: 'trigger' | 'reply' | null = imageFileId
+      ? 'trigger'
+      : replyImageFileId
+        ? 'reply'
+        : null
+    const image = chosenFileId && chosenSource
+      ? await resolveImage(ctx, chosenFileId, chosenSource)
+      : null
+
+    const iterator = answer(cleanedText, replyContext, image)[
+      Symbol.asyncIterator
+    ]()
     let firstDelta: string | null = null
     while (true) {
       const step = await iterator.next()

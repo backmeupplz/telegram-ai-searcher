@@ -1,15 +1,18 @@
 import type { Context } from 'grammy'
+import type { Message, PhotoSize } from 'grammy/types'
 
 export type ReplyContext = {
   author: string
   isBot: boolean
   text: string
+  imageFileId: string | null
 }
 
 export type Trigger = {
   triggered: boolean
   cleanedText: string
   replyContext: ReplyContext | null
+  imageFileId: string | null
 }
 
 export function detectTrigger(ctx: Context): Trigger {
@@ -19,14 +22,17 @@ export function detectTrigger(ctx: Context): Trigger {
     triggered: false,
     cleanedText: '',
     replyContext: null,
+    imageFileId: null,
   }
-  if (!message || !text.trim()) return empty
+  const hasPhoto = !!message?.photo?.length
+  if (!message || (!text.trim() && !hasPhoto)) return empty
 
   if (ctx.chat?.type === 'private') {
     return {
       triggered: true,
       cleanedText: text.trim(),
       replyContext: extractReplyContext(ctx),
+      imageFileId: pickLargestPhoto(message),
     }
   }
 
@@ -59,6 +65,7 @@ export function detectTrigger(ctx: Context): Trigger {
     triggered: true,
     cleanedText: cleaned.replace(/\s+/g, ' ').trim(),
     replyContext: extractReplyContext(ctx),
+    imageFileId: pickLargestPhoto(message),
   }
 }
 
@@ -66,7 +73,8 @@ function extractReplyContext(ctx: Context): ReplyContext | null {
   const reply = ctx.message?.reply_to_message
   if (!reply) return null
   const text = reply.text ?? reply.caption ?? ''
-  if (!text.trim()) return null
+  const imageFileId = pickLargestPhoto(reply)
+  if (!text.trim() && !imageFileId) return null
   const from = reply.from
   const isBot = from?.id === ctx.me.id
   const author = isBot
@@ -74,7 +82,18 @@ function extractReplyContext(ctx: Context): ReplyContext | null {
     : from?.username
       ? `@${from.username}`
       : (from?.first_name ?? 'someone')
-  return { author, isBot, text: text.trim() }
+  return { author, isBot, text: text.trim(), imageFileId }
+}
+
+function pickLargestPhoto(message: Message | undefined): string | null {
+  const photo = message?.photo
+  if (!photo?.length) return null
+  const largest = photo.reduce<PhotoSize>(
+    (best, current) =>
+      current.width * current.height > best.width * best.height ? current : best,
+    photo[0]!,
+  )
+  return largest.file_id
 }
 
 function stripSlice(text: string, offset: number, length: number): string {
