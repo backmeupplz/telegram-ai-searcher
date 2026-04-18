@@ -1,5 +1,57 @@
 const VOID_TAGS = new Set(['br', 'hr', 'img'])
 
+// Telegram Bot API "HTML" parse_mode whitelist.
+// https://core.telegram.org/bots/api#html-style
+const ALLOWED_TAGS = new Set([
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  'ins',
+  's',
+  'strike',
+  'del',
+  'a',
+  'code',
+  'pre',
+  'span',
+  'tg-spoiler',
+  'tg-emoji',
+  'blockquote',
+])
+
+function tagName(inner: string): string {
+  const trimmed = inner.startsWith('/') ? inner.slice(1) : inner
+  return trimmed.replace(/\/$/, '').trim().split(/\s/)[0]?.toLowerCase() ?? ''
+}
+
+function escapeUnsupportedTags(s: string): string {
+  let out = ''
+  let pos = 0
+  while (pos < s.length) {
+    const lt = s.indexOf('<', pos)
+    if (lt === -1) {
+      out += s.slice(pos)
+      break
+    }
+    out += s.slice(pos, lt)
+    const gt = s.indexOf('>', lt)
+    if (gt === -1) {
+      out += s.slice(lt).replace(/</g, '&lt;')
+      break
+    }
+    const inner = s.slice(lt + 1, gt).trim()
+    if (ALLOWED_TAGS.has(tagName(inner))) {
+      out += s.slice(lt, gt + 1)
+    } else {
+      out += `&lt;${s.slice(lt + 1, gt)}&gt;`
+    }
+    pos = gt + 1
+  }
+  return out
+}
+
 type TagStep = {
   stack: string[]
   cursor: number
@@ -19,11 +71,15 @@ function parseNextTag(s: string, start: number, stack: string[]): TagStep {
   const next = [...stack]
   if (tag.startsWith('/')) {
     const name = tag.slice(1).split(/\s/)[0]?.toLowerCase() ?? ''
-    if (next[next.length - 1] === name) next.pop()
+    if (!ALLOWED_TAGS.has(name)) {
+      // Unsupported close: treat as literal; escaped later.
+    } else if (next[next.length - 1] === name) next.pop()
     else return { stack: next, cursor: lt, aborted: true }
   } else if (!tag.endsWith('/')) {
     const name = tag.split(/\s/)[0]?.toLowerCase() ?? ''
-    if (!VOID_TAGS.has(name)) next.push(name)
+    if (!ALLOWED_TAGS.has(name)) {
+      // Unsupported open: treat as literal so it doesn't stall the stream.
+    } else if (!VOID_TAGS.has(name)) next.push(name)
   }
   return { stack: next, cursor: gt + 1, aborted: false }
 }
@@ -70,9 +126,9 @@ export async function* safeHtmlStream(
     pending += chunk
     const n = safePrefixLen(pending)
     if (n > 0) {
-      yield pending.slice(0, n)
+      yield escapeUnsupportedTags(pending.slice(0, n))
       pending = pending.slice(n)
     }
   }
-  if (pending) yield closeOpenTags(pending)
+  if (pending) yield escapeUnsupportedTags(closeOpenTags(pending))
 }
