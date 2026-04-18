@@ -225,4 +225,12 @@ bot.catch((err) => {
 
 await bot.init()
 console.log(`telegram-ai-searcher online as @${bot.botInfo.username}`)
-run(bot)
+const runner = run(bot)
+
+const shutdown = async (signal: string) => {
+  console.log(`received ${signal}, stopping runner…`)
+  if (runner.isRunning()) await runner.stop()
+  process.exit(0)
+}
+process.once('SIGINT', () => shutdown('SIGINT'))
+process.once('SIGTERM', () => shutdown('SIGTERM'))
