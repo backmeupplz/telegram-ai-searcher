@@ -42,6 +42,9 @@ Formatting rules (IMPORTANT — the message is rendered with Telegram HTML parse
 export type BotEvent =
   | { kind: 'status'; text: string }
   | { kind: 'text'; delta: string }
+  | { kind: 'error'; text: string }
+
+const STEP_LIMIT = 15
 
 export type ImageInput = {
   url: string
@@ -103,7 +106,7 @@ export async function* answer(
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
-    stopWhen: stepCountIs(5),
+    stopWhen: stepCountIs(STEP_LIMIT),
     tools: {
       web_search: tool({
         description:
@@ -163,15 +166,27 @@ export async function* answer(
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   let hasEmittedText = false
+  let stepCount = 0
+  let finishReason: string | null = null
   let stepLabels: Array<{ icon: string; text: string }> = []
   let pendingSeparatorLabels: Array<{ icon: string; text: string }> | null =
     null
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'start-step') {
+      stepCount += 1
       if (hasEmittedText && stepLabels.length > 0) {
         pendingSeparatorLabels = stepLabels
       }
       stepLabels = []
+    } else if (chunk.type === 'finish') {
+      finishReason =
+        (chunk as { finishReason?: string | null }).finishReason ?? null
+    } else if (chunk.type === 'error') {
+      const err = (chunk as { error: unknown }).error
+      const message = err instanceof Error ? err.message : String(err)
+      console.log(`[stream] ERROR: ${message}`)
+      yield { kind: 'error', text: `Stream error: ${message}` }
+      return
     } else if (chunk.type === 'tool-call' && chunk.toolName === 'web_search') {
       const query =
         (chunk as unknown as { input?: { query?: string } }).input?.query ?? ''
@@ -205,5 +220,25 @@ export async function* answer(
       yield { kind: 'text', delta: chunk.text }
       hasEmittedText = true
     }
+  }
+
+  if (!hasEmittedText) {
+    console.log(
+      `[answer] no text emitted. steps=${stepCount}/${STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
+    )
+    let reason: string
+    if (finishReason === 'tool-calls' && stepCount >= STEP_LIMIT) {
+      reason = `Hit the ${STEP_LIMIT}-step tool-call limit before the model produced an answer. Try a narrower question or ask me to summarise what I already found.`
+    } else if (finishReason === 'length') {
+      reason =
+        'The model hit its output token limit before producing any text.'
+    } else if (finishReason === 'content-filter') {
+      reason = 'The response was blocked by the content filter.'
+    } else if (finishReason && finishReason !== 'stop') {
+      reason = `The model stopped without replying (reason: ${finishReason}).`
+    } else {
+      reason = 'The model returned no text.'
+    }
+    yield { kind: 'error', text: reason }
   }
 }

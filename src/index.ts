@@ -123,12 +123,16 @@ bot.on('message', async (ctx) => {
       Symbol.asyncIterator
     ]()
     let firstDelta: string | null = null
+    let preTextError: string | null = null
     while (true) {
       const step = await iterator.next()
       if (step.done) break
       const ev = step.value as BotEvent
       if (ev.kind === 'status') {
         await setStatus(ev.text)
+      } else if (ev.kind === 'error') {
+        preTextError = ev.text
+        break
       } else {
         firstDelta = ev.delta
         break
@@ -136,7 +140,7 @@ bot.on('message', async (ctx) => {
     }
 
     if (firstDelta === null) {
-      await setStatus('No response.')
+      await setStatus(preTextError ?? 'No response.')
       return
     }
 
@@ -148,6 +152,10 @@ bot.on('message', async (ctx) => {
         if (step.done) return
         const ev = step.value as BotEvent
         if (ev.kind === 'text') yield ev.delta
+        else if (ev.kind === 'error') {
+          yield `\n\n<i>⚠️ ${escapeHtml(ev.text)}</i>`
+          return
+        }
       }
     })()
 
