@@ -10,15 +10,35 @@ const fireworks = createOpenAICompatible({
   apiKey: env.FIREWORKS_API_KEY,
 })
 
-const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat.
+const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat. The current date is ${new Date().toISOString().slice(0, 10)}.
 
-- When a question needs fresh, current, or factual information, call the web_search tool.
-- You may call web_search multiple times with different queries to cover a topic.
-- Synthesize a clear, direct answer from the search results. Cite sources inline as markdown links using only the domain name, e.g. [wikipedia.org](https://...).
-- Keep answers compact and conversational; this is a chat, not an essay.
-- Use Telegram-compatible markdown only (bold, italics, inline links). No headings, no tables.`
+Your training data is out of date. You MUST use the web_search tool for ANY question that involves:
+- current events, news, prices, versions, releases, or anything time-sensitive
+- specific products, companies, people, or technologies (including AI models, software, APIs)
+- factual claims where recency matters
+- anything the user explicitly asks you to "search" or "look up"
 
-export function answer(question: string): AsyncIterable<string> {
+Do NOT answer from your own knowledge when the user's question touches any of the above. Call web_search first. You may call it multiple times with different focused queries to cover a topic before answering. Only after you have search results should you synthesize an answer.
+
+Cite sources inline with a link tag whose href is the EXACT full URL returned by web_search (including path, query string, anchors) and whose visible text is just the domain. Example: if web_search returned https://www.medium.com/@user/why-opus-wins-abc123, cite it as <a href="https://www.medium.com/@user/why-opus-wins-abc123">medium.com</a> — never shorten the href to the bare domain. If the search returns nothing useful, say so instead of guessing.
+Keep answers compact and conversational; this is a chat, not an essay.
+
+Formatting rules (IMPORTANT — the message is rendered with Telegram HTML parse mode):
+- Use ONLY these HTML tags: <b>bold</b>, <i>italic</i>, <code>inline code</code>, <pre>code block</pre>, <a href="URL">link text</a>.
+- Do NOT use markdown syntax like **bold**, *italic*, backticks, or [text](url) — they will appear as literal characters.
+- Do NOT use <h1>, <h2>, <ul>, <li>, <br>, <p>, or any other tags — they will break the message.
+- Escape literal &, <, > in prose as &amp;, &lt;, &gt;.
+- No tables. Use short paragraphs or dash-prefixed lines for lists.`
+
+export type BotEvent =
+  | { kind: 'status'; text: string }
+  | { kind: 'text'; delta: string }
+
+function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value
+}
+
+export async function* answer(question: string): AsyncGenerator<BotEvent> {
   const result = streamText({
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
@@ -35,23 +55,44 @@ export function answer(question: string): AsyncIterable<string> {
             .describe('A focused search query, as you would type into Google.'),
         }),
         execute: async ({ query }) => {
+          console.log(`[web_search] ${query}`)
           try {
             const results = await webSearch(query)
+            console.log(`[web_search] -> ${results.length} results`)
             if (results.length === 0) {
               return { query, results: [], note: 'No results found.' }
             }
             return { query, results }
           } catch (error) {
-            return {
-              query,
-              results: [],
-              error: error instanceof Error ? error.message : String(error),
-            }
+            const message =
+              error instanceof Error ? error.message : String(error)
+            console.log(`[web_search] ERROR: ${message}`)
+            return { query, results: [], error: message }
           }
         },
       }),
     },
   })
 
-  return result.textStream
+  let sawToolCallThisStep = false
+  for await (const chunk of result.fullStream) {
+    if (chunk.type === 'start-step') {
+      sawToolCallThisStep = false
+    } else if (chunk.type === 'tool-call' && chunk.toolName === 'web_search') {
+      sawToolCallThisStep = true
+      const query =
+        (chunk as unknown as { input?: { query?: string } }).input?.query ?? ''
+      yield {
+        kind: 'status',
+        text: `🔎 Searching the web for "${truncate(query, 80)}"…`,
+      }
+    } else if (chunk.type === 'tool-result') {
+      yield { kind: 'status', text: '🧠 Generating response…' }
+    } else if (chunk.type === 'text-delta') {
+      if (!sawToolCallThisStep) {
+        // Model produced text without searching on this step
+      }
+      yield { kind: 'text', delta: chunk.text }
+    }
+  }
 }
