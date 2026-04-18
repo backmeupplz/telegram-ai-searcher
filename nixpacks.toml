@@ -1,0 +1,14 @@
+providers = ["node"]
+
+[variables]
+NODE_ENV = "production"
+
+[phases.setup]
+nixPkgs = ["bun"]
+
+[phases.install]
+onlyIncludeFiles = ["package.json", "bun.lock"]
+cmds = ["bun install --frozen-lockfile"]
+
+[start]
+cmd = "bun run start"
