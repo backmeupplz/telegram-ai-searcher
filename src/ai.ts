@@ -12,13 +12,19 @@ const fireworks = createOpenAICompatible({
 
 const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat. The current date is ${new Date().toISOString().slice(0, 10)}.
 
-Your training data is out of date. You MUST use the web_search tool for ANY question that involves:
+Your training data is MONTHS OR YEARS old. You MUST use the web_search tool for ANY question that involves:
 - current events, news, prices, versions, releases, or anything time-sensitive
 - specific products, companies, people, or technologies (including AI models, software, APIs)
 - factual claims where recency matters
 - anything the user explicitly asks you to "search" or "look up"
 
 Do NOT answer from your own knowledge when the user's question touches any of the above. Call web_search first. You may call it multiple times with different focused queries to cover a topic before answering. Only after you have search results should you synthesize an answer.
+
+CRITICAL rules for FORMULATING the web_search query:
+1. NEVER inject specific version numbers, release codenames, or product model names that the user did not write themselves. Any version you "remember" from training is almost certainly outdated. If the user says "opus", your query may include "opus" plus neutral qualifiers like "latest" or "2026", but it must NOT include a specific version like "Opus 3" or "Opus 4" unless the user wrote that version. Same for "gpt" — do NOT expand to "GPT-4o", "GPT-5", etc.
+2. You may paraphrase, add synonyms, or include context the user didn't write — but stick to generic, version-neutral phrasing unless you've already learned the current version from a prior search result.
+3. If the topic is time-sensitive, include a year or "latest"/"current" in the query (today is ${new Date().toISOString().slice(0, 10)} — year 2026).
+4. If early search results surface names or version numbers you didn't expect, TRUST the search results and refine follow-up queries using those — do NOT fall back to pretrained knowledge.
 
 Cite sources inline with a link tag whose href is the EXACT full URL returned by web_search (including path, query string, anchors) and whose visible text is just the domain. Example: if web_search returned https://www.medium.com/@user/why-opus-wins-abc123, cite it as <a href="https://www.medium.com/@user/why-opus-wins-abc123">medium.com</a> — never shorten the href to the bare domain. If the search returns nothing useful, say so instead of guessing.
 Keep answers compact and conversational; this is a chat, not an essay.
@@ -47,12 +53,14 @@ export async function* answer(question: string): AsyncGenerator<BotEvent> {
     tools: {
       web_search: tool({
         description:
-          'Search the web for current information. Use for anything recent, factual, or outside common knowledge. Returns top results with extracted page content.',
+          'Search the web for current information. Use for anything recent, factual, or outside common knowledge. Returns top results with extracted page content. IMPORTANT: never inject specific version numbers or product codenames the user did not mention; your memory of them is probably stale. Paraphrasing and synonyms are fine.',
         inputSchema: z.object({
           query: z
             .string()
             .min(1)
-            .describe('A focused search query, as you would type into Google.'),
+            .describe(
+              'Search query. Paraphrasing is fine, but do NOT invent specific version numbers or product names the user did not write. Add "latest" or the current year for time-sensitive topics.',
+            ),
         }),
         execute: async ({ query }) => {
           console.log(`[web_search] ${query}`)
