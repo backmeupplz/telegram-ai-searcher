@@ -12,7 +12,7 @@ type AppContext = StreamFlavor<Context>
 const bot = new Bot<AppContext>(env.TELEGRAM_BOT_TOKEN)
 
 bot.api.config.use(autoRetry())
-bot.use(sequentialize((ctx) => ctx.chat?.id.toString()))
+bot.use(sequentialize((ctx) => ctx.from?.id.toString()))
 bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
