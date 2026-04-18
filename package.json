@@ -1,0 +1,30 @@
+{
+  "name": "telegram-ai-searcher",
+  "version": "0.1.0",
+  "description": "Telegram bot that answers questions with Fireworks AI + self-hosted SearXNG web search, streaming the reply live via grammY.",
+  "module": "src/index.ts",
+  "type": "module",
+  "repository": "https://github.com/backmeupplz/telegram-ai-searcher",
+  "author": "Nikita Kolmogorov <n@borodutch.com>",
+  "license": "MIT",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/jsdom": "^21.1.7",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.18",
+    "@grammyjs/auto-retry": "^2.0.2",
+    "@grammyjs/stream": "^1.0.1",
+    "@mozilla/readability": "^0.5.0",
+    "ai": "^5.0.0",
+    "grammy": "^1.30.0",
+    "jsdom": "^25.0.0",
+    "zod": "^3.23.0"
+  }
+}
