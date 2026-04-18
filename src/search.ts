@@ -15,7 +15,7 @@ type SearxngRawResult = {
   content?: string
 }
 
-const FETCH_TIMEOUT_MS = 8000
+const FETCH_TIMEOUT_MS = 30000
 const MAX_CONTENT_CHARS = 4000
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
