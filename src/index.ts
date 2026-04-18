@@ -14,6 +14,7 @@ bot.api.config.use(autoRetry())
 bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
+const GROUP_MIN_FIRST_EDIT_CHARS = 15
 
 bot.on('message', async (ctx) => {
   const { triggered, cleanedText } = detectTrigger(ctx)
@@ -97,19 +98,23 @@ bot.on('message', async (ctx) => {
         },
       )
     } else {
-      // Groups: reuse the status message and edit-stream the answer into it
+      // Groups: reuse the status message and edit-stream the answer into it.
+      // Keep the italic status visible until we have enough text to avoid a
+      // jarring one-character flash, then edit periodically with "…" appended.
       let accumulated = ''
       let lastEditAt = 0
       for await (const piece of safeHtmlStream(textStream)) {
         accumulated += piece
+        if (accumulated.length < GROUP_MIN_FIRST_EDIT_CHARS) continue
         const now = Date.now()
         if (
           statusMsgId !== null &&
           now - lastEditAt >= GROUP_EDIT_INTERVAL_MS
         ) {
           lastEditAt = now
+          lastStatus = ''
           await ctx.api
-            .editMessageText(chatId, statusMsgId, accumulated, {
+            .editMessageText(chatId, statusMsgId, `${accumulated} …`, {
               parse_mode: 'HTML',
               link_preview_options: { is_disabled: true },
             })
@@ -117,6 +122,7 @@ bot.on('message', async (ctx) => {
         }
       }
       if (accumulated && statusMsgId !== null) {
+        lastStatus = ''
         await ctx.api
           .editMessageText(chatId, statusMsgId, accumulated, {
             parse_mode: 'HTML',
