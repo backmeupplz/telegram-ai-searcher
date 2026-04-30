@@ -1,7 +1,7 @@
 import { autoRetry } from '@grammyjs/auto-retry'
 import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
-import { Bot, type Context } from 'grammy'
+import { API_CONSTANTS, Bot, type Context } from 'grammy'
 import type { InlineKeyboardMarkup, InlineQueryResult } from 'grammy/types'
 import { answer, type BotEvent, type ImageInput } from './ai'
 import { env } from './env'
@@ -128,6 +128,9 @@ bot.on('callback_query:data', async (ctx) => {
 bot.on('chosen_inline_result', async (ctx) => {
   const query = ctx.chosenInlineResult.query.trim()
   const inlineMessageId = ctx.chosenInlineResult.inline_message_id
+  console.log(
+    `[inline] chosen result query="${truncatePlain(query, 80)}" editable=${Boolean(inlineMessageId)}`,
+  )
   if (!query || !inlineMessageId) return
 
   const editInline = async (
@@ -140,7 +143,10 @@ bot.on('chosen_inline_result', async (ctx) => {
         link_preview_options: { is_disabled: true },
         reply_markup: replyMarkup,
       })
-      .catch(() => undefined)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[inline] edit failed: ${message}`)
+      })
   }
 
   try {
@@ -392,7 +398,9 @@ process.once('SIGTERM', () => shutdown('SIGTERM'))
 // loop with backoff instead of letting the process exit.
 let backoffMs = 2_000
 while (!shuttingDown) {
-  currentRunner = run(bot)
+  currentRunner = run(bot, {
+    runner: { fetch: { allowed_updates: API_CONSTANTS.DEFAULT_UPDATE_TYPES } },
+  })
   const task = currentRunner.task()
   try {
     if (task) await task
