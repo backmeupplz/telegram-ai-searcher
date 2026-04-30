@@ -1,5 +1,5 @@
 import { autoRetry } from '@grammyjs/auto-retry'
-import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner'
+import { run, type RunnerHandle } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
 import { Bot, type Context } from 'grammy'
 import type { InlineKeyboardMarkup, InlineQueryResult } from 'grammy/types'
@@ -13,7 +13,6 @@ type AppContext = StreamFlavor<Context>
 const bot = new Bot<AppContext>(env.TELEGRAM_BOT_TOKEN)
 
 bot.api.config.use(autoRetry())
-bot.use(sequentialize((ctx) => ctx.from?.id.toString()))
 bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
