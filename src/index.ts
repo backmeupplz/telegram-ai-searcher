@@ -1,7 +1,7 @@
 import { autoRetry } from '@grammyjs/auto-retry'
 import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
-import { API_CONSTANTS, Bot, type Context } from 'grammy'
+import { Bot, type Context } from 'grammy'
 import type { InlineKeyboardMarkup, InlineQueryResult } from 'grammy/types'
 import { answer, type BotEvent, type ImageInput } from './ai'
 import { env } from './env'
@@ -20,6 +20,12 @@ const GROUP_EDIT_INTERVAL_MS = 1500
 const GROUP_MIN_FIRST_EDIT_CHARS = 15
 const INLINE_EDIT_INTERVAL_MS = 1500
 const TELEGRAM_TEXT_MAX_CHARS = 4096
+const ALLOWED_UPDATES = [
+  'message',
+  'inline_query',
+  'chosen_inline_result',
+  'callback_query',
+] as const
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -90,6 +96,7 @@ const inlineDoneMarkup: InlineKeyboardMarkup = { inline_keyboard: [] }
 
 bot.on('inline_query', async (ctx) => {
   const query = ctx.inlineQuery.query.trim()
+  console.log(`[inline] query="${truncatePlain(query, 80)}"`)
 
   if (!query) {
     await ctx.answerInlineQuery(
@@ -118,6 +125,7 @@ bot.on('inline_query', async (ctx) => {
     ],
     { cache_time: 0, is_personal: true },
   )
+  console.log(`[inline] placeholder sent query="${truncatePlain(query, 80)}"`)
 })
 
 bot.on('callback_query:data', async (ctx) => {
@@ -131,7 +139,12 @@ bot.on('chosen_inline_result', async (ctx) => {
   console.log(
     `[inline] chosen result query="${truncatePlain(query, 80)}" editable=${Boolean(inlineMessageId)}`,
   )
-  if (!query || !inlineMessageId) return
+  if (!query || !inlineMessageId) {
+    console.warn(
+      '[inline] chosen result cannot be edited; enable inline feedback in BotFather and keep the inline keyboard on the placeholder',
+    )
+    return
+  }
 
   const editInline = async (
     bodyHtml: string,
@@ -399,7 +412,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'))
 let backoffMs = 2_000
 while (!shuttingDown) {
   currentRunner = run(bot, {
-    runner: { fetch: { allowed_updates: API_CONSTANTS.DEFAULT_UPDATE_TYPES } },
+    runner: { fetch: { allowed_updates: ALLOWED_UPDATES } },
   })
   const task = currentRunner.task()
   try {
