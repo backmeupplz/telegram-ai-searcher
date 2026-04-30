@@ -2,10 +2,11 @@ import { autoRetry } from '@grammyjs/auto-retry'
 import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner'
 import { stream, type StreamFlavor } from '@grammyjs/stream'
 import { Bot, type Context } from 'grammy'
+import type { InlineKeyboardMarkup, InlineQueryResult } from 'grammy/types'
 import { answer, type BotEvent, type ImageInput } from './ai'
 import { env } from './env'
 import { detectTrigger } from './mention'
-import { safeHtmlStream } from './safe-html'
+import { safeHtmlStream, truncateSafeHtml } from './safe-html'
 
 type AppContext = StreamFlavor<Context>
 
@@ -17,6 +18,11 @@ bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
 const GROUP_MIN_FIRST_EDIT_CHARS = 15
+const INLINE_EDIT_INTERVAL_MS = 1500
+const TELEGRAM_TEXT_MAX_CHARS = 4096
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 const START_MESSAGE = `👋 I'm a Telegram bot that answers questions by searching the web and streaming the reply live.
 
@@ -29,6 +35,7 @@ const START_MESSAGE = `👋 I'm a Telegram bot that answers questions by searchi
 <b>How to use me</b>
 - In private chat: just send a question or an image
 - In groups: @mention me or reply to one of my messages
+- Inline mode: type my username followed by a question in any chat
 - Reply to any message with a question and I'll use it as context
 - Write in any language — I'll reply in the same one
 
@@ -41,6 +48,138 @@ bot.command('start', async (ctx) => {
       link_preview_options: { is_disabled: true },
     })
     .catch(() => undefined)
+})
+
+function inlineArticle(
+  id: string,
+  title: string,
+  description: string,
+  messageText: string,
+  replyMarkup?: InlineKeyboardMarkup,
+): InlineQueryResult {
+  return {
+    type: 'article',
+    id,
+    title,
+    description,
+    input_message_content: {
+      message_text: messageText,
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    },
+    reply_markup: replyMarkup,
+  }
+}
+
+function truncatePlain(value: string, maxChars: number): string {
+  return value.length > maxChars ? `${value.slice(0, maxChars - 1)}…` : value
+}
+
+function inlineMessage(question: string, bodyHtml: string): string {
+  return truncateSafeHtml(
+    `<blockquote>${escapeHtml(question)}</blockquote>\n\n${bodyHtml}`,
+    TELEGRAM_TEXT_MAX_CHARS,
+  )
+}
+
+const inlineWorkingMarkup: InlineKeyboardMarkup = {
+  inline_keyboard: [[{ text: '...', callback_data: 'inline-working' }]],
+}
+
+const inlineDoneMarkup: InlineKeyboardMarkup = { inline_keyboard: [] }
+
+bot.on('inline_query', async (ctx) => {
+  const query = ctx.inlineQuery.query.trim()
+
+  if (!query) {
+    await ctx.answerInlineQuery(
+      [
+        inlineArticle(
+          'help',
+          'Ask with web search',
+          'Type a question after the bot username.',
+          'Type a question after the bot username to get an AI web-search answer.',
+        ),
+      ],
+      { cache_time: 300, is_personal: true },
+    )
+    return
+  }
+
+  await ctx.answerInlineQuery(
+    [
+      inlineArticle(
+        ctx.inlineQuery.id,
+        truncatePlain(query, 64),
+        'Send now, then the bot edits in the answer.',
+        inlineMessage(query, '<i>🤔 Thinking...</i>'),
+        inlineWorkingMarkup,
+      ),
+    ],
+    { cache_time: 0, is_personal: true },
+  )
+})
+
+bot.on('callback_query:data', async (ctx) => {
+  if (ctx.callbackQuery.data !== 'inline-working') return
+  await ctx.answerCallbackQuery('Still working...').catch(() => undefined)
+})
+
+bot.on('chosen_inline_result', async (ctx) => {
+  const query = ctx.chosenInlineResult.query.trim()
+  const inlineMessageId = ctx.chosenInlineResult.inline_message_id
+  if (!query || !inlineMessageId) return
+
+  const editInline = async (
+    bodyHtml: string,
+    replyMarkup: InlineKeyboardMarkup = inlineWorkingMarkup,
+  ) => {
+    await ctx.api
+      .editMessageTextInline(inlineMessageId, inlineMessage(query, bodyHtml), {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        reply_markup: replyMarkup,
+      })
+      .catch(() => undefined)
+  }
+
+  try {
+    await editInline(`<i>🔎 Searching "${escapeHtml(truncatePlain(query, 80))}"...</i>`)
+
+    const rawText = (async function* () {
+      let hasText = false
+      for await (const ev of answer(query)) {
+        if (ev.kind === 'status' && !hasText) {
+          await editInline(`<i>${escapeHtml(ev.text)}</i>`)
+        } else if (ev.kind === 'text') {
+          hasText = true
+          yield ev.delta
+        } else if (ev.kind === 'error') {
+          yield `\n\n<i>⚠️ ${escapeHtml(ev.text)}</i>`
+          return
+        }
+      }
+    })()
+
+    let accumulated = ''
+    let lastEditAt = 0
+    for await (const piece of safeHtmlStream(rawText)) {
+      accumulated += piece
+      const now = Date.now()
+      if (now - lastEditAt >= INLINE_EDIT_INTERVAL_MS) {
+        lastEditAt = now
+        await editInline(`${accumulated} ...`)
+      }
+    }
+
+    await editInline(accumulated || 'No response.', inlineDoneMarkup)
+  } catch (error) {
+    console.error('inline query failed:', error)
+    const message = `Sorry, something went wrong: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+    await editInline(escapeHtml(message), inlineDoneMarkup)
+  }
 })
 
 async function resolveImage(
@@ -87,8 +226,6 @@ bot.on('message', async (ctx) => {
 
   let statusMsgId: number | null = null
   let lastStatus = ''
-  const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const setStatus = async (text: string) => {
     if (text === lastStatus) return
     lastStatus = text

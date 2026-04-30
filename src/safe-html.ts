@@ -118,6 +118,32 @@ function closeOpenTags(s: string): string {
   return output + stack.reverse().map((name) => `</${name}>`).join('')
 }
 
+function trimDanglingEntity(s: string): string {
+  const amp = s.lastIndexOf('&')
+  if (amp === -1) return s
+  const tail = s.slice(amp)
+  return tail.includes(';') ? s : s.slice(0, amp)
+}
+
+export function truncateSafeHtml(
+  html: string,
+  maxChars: number,
+  suffix = '<i>... truncated</i>',
+): string {
+  if (html.length <= maxChars) return html
+
+  const separator = '\n\n'
+  let end = Math.max(0, maxChars - separator.length - suffix.length)
+  while (end > 0) {
+    const prefix = closeOpenTags(trimDanglingEntity(html.slice(0, end)).trimEnd())
+    const candidate = `${prefix}${separator}${suffix}`
+    if (candidate.length <= maxChars) return candidate
+    end -= candidate.length - maxChars
+  }
+
+  return suffix.slice(0, maxChars)
+}
+
 export async function* safeHtmlStream(
   source: AsyncIterable<string>,
 ): AsyncGenerator<string> {

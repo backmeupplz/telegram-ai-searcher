@@ -1,8 +1,8 @@
 # telegram-ai-searcher
 
-Telegram bot that answers free-form questions by searching the web and streaming the reply live into chat. Built with [grammY](https://grammy.dev), [Vercel AI SDK](https://sdk.vercel.ai), [Fireworks AI](https://fireworks.ai), and self-hosted [SearXNG](https://github.com/searxng/searxng).
+Telegram bot that answers free-form questions by searching the web and streaming the reply live into chat. It also supports Telegram inline mode, so you can type the bot username plus a question in any chat and send the generated answer. Built with [grammY](https://grammy.dev), [Vercel AI SDK](https://sdk.vercel.ai), [Fireworks AI](https://fireworks.ai), and self-hosted [SearXNG](https://github.com/searxng/searxng).
 
-**Live demo:** [@frdy_bot](https://t.me/frdy_bot) — DM it a question, or mention it in a group.
+**Live demo:** [@frdy_bot](https://t.me/frdy_bot) — DM it a question, mention it in a group, or use it inline.
 
 ## Features
 
@@ -11,6 +11,7 @@ Telegram bot that answers free-form questions by searching the web and streaming
 - Live status message during processing (`Thinking…` → `Searching the web for "…"` → `Generating response…`) that's deleted the moment the streamed answer starts
 - `typing` chat action sent on every request
 - Only replies when the bot is `@mentioned` or the message is a reply to the bot (in private chats it always responds)
+- Answers inline queries with a sendable article result
 - Web search runs against your own SearXNG instance; top N results are fetched and passed through Mozilla Readability before being handed to the model
 - Inline source citations in the answer, with the full URL preserved and only the domain shown as link text
 - HTML responses are gated through a stack-balanced stream so partial tags never hit Telegram's parser mid-draft
@@ -18,7 +19,7 @@ Telegram bot that answers free-form questions by searching the web and streaming
 ## Requirements
 
 - [Bun](https://bun.sh) 1.1+
-- A Telegram bot token from [@BotFather](https://t.me/BotFather) (turn **Group Privacy** off if you want mentions/replies to work in groups)
+- A Telegram bot token from [@BotFather](https://t.me/BotFather) (turn **Group Privacy** off if you want mentions/replies to work in groups, and enable **Inline Mode** plus **Inline Feedback** if you want `@bot query` usage with live edits)
 - A [Fireworks AI](https://fireworks.ai) API key and the full model id you want to use
 - A running [SearXNG](https://github.com/searxng/searxng) instance with the JSON format enabled
 
@@ -61,12 +62,14 @@ bun run start
 
 ## How it works
 
-1. User sends a message. In a group the bot only reacts when `@mentioned` or the message replies to one of its own.
+1. User sends a message. In a group the bot only reacts when `@mentioned` or the message replies to one of its own. Inline queries are handled through Telegram's `inline_query` update.
 2. A `typing` action fires and an italic status message is posted: `🤔 Thinking…`.
 3. The message goes to Fireworks via the Vercel AI SDK, with a single `web_search` tool available.
 4. When the model calls `web_search`, the status edits to `🔎 Searching the web for "<query>"…`; the bot hits SearXNG, fetches the top N URLs, and extracts clean text via [`@mozilla/readability`](https://github.com/mozilla/readability) before returning it.
 5. When tool results land, the status edits to `🧠 Generating response…`.
 6. As soon as the model emits the first text token, the status message is deleted and `ctx.replyWithStream` takes over, streaming the answer as a live-updating reply.
+
+For inline mode, the bot immediately returns a sendable `Thinking...` article. When the user sends it, the message quotes the original prompt and then edits through search/generation updates into the final answer. Telegram only exposes the editable inline message id when inline feedback is enabled and the inline result has an inline keyboard, so the bot attaches a minimal temporary `...` button while working and removes it on the final edit.
 
 ## Deployment
 
