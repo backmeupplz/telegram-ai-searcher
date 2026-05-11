@@ -91,7 +91,11 @@ function buildMessages(
 
   parts.push({
     type: 'text',
-    text: question ? `User's question:\n${question}` : "User's question: (see image)",
+    text: question
+      ? `User's question:\n${question}`
+      : image
+        ? "User's question: (see image)"
+        : "User's question: (not provided; respond to the provided context)",
   })
 
   return [{ role: 'user', content: parts }]
