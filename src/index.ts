@@ -5,6 +5,12 @@ import { Bot, type Context } from 'grammy'
 import type { InlineKeyboardMarkup, InlineQueryResult } from 'grammy/types'
 import { answer, type BotEvent, type ImageInput } from './ai'
 import { env } from './env'
+import {
+  detectGuestInteraction,
+  evaluateGuestInteraction,
+  type GuestInteraction,
+  type GuestUpdate,
+} from './guest'
 import { detectTrigger } from './mention'
 import { safeHtmlStream, truncateSafeHtml } from './safe-html'
 
@@ -21,10 +27,11 @@ const INLINE_EDIT_INTERVAL_MS = 1500
 const TELEGRAM_TEXT_MAX_CHARS = 4096
 const ALLOWED_UPDATES = [
   'message',
+  'guest_message',
   'inline_query',
   'chosen_inline_result',
   'callback_query',
-] as const
+] as string[]
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -92,6 +99,144 @@ const inlineWorkingMarkup: InlineKeyboardMarkup = {
 }
 
 const inlineDoneMarkup: InlineKeyboardMarkup = { inline_keyboard: [] }
+
+type SentGuestMessage = {
+  inline_message_id: string
+}
+
+async function answerGuestQuery(
+  guestQueryId: string,
+  result: InlineQueryResult,
+): Promise<SentGuestMessage> {
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerGuestQuery`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ guest_query_id: guestQueryId, result }),
+    },
+  )
+  const payload = (await response.json()) as {
+    ok?: boolean
+    result?: SentGuestMessage
+    description?: string
+  }
+  if (!response.ok || !payload.ok || !payload.result?.inline_message_id) {
+    throw new Error(
+      payload.description ?? `answerGuestQuery failed with HTTP ${response.status}`,
+    )
+  }
+  return payload.result
+}
+
+function guestPromptLabel(interaction: GuestInteraction): string {
+  if (interaction.cleanedText) return interaction.cleanedText
+  if (interaction.replyContext?.text) {
+    return `Replying to: ${truncatePlain(interaction.replyContext.text, 120)}`
+  }
+  if (interaction.imageFileId || interaction.replyContext?.imageFileId) {
+    return 'Image question'
+  }
+  return 'Guest interaction'
+}
+
+async function handleGuestInteraction(
+  ctx: AppContext,
+  interaction: GuestInteraction,
+) {
+  const decision = evaluateGuestInteraction(interaction)
+  if (!decision.ok) {
+    console.warn(`[guest] skipped ${interaction.queryId}: ${decision.reason}`)
+    return
+  }
+
+  const label = guestPromptLabel(interaction)
+  console.log(`[guest] query="${truncatePlain(label, 80)}"`)
+
+  const placeholder = await answerGuestQuery(
+    interaction.queryId,
+    inlineArticle(
+      `guest-${interaction.messageId}`,
+      truncatePlain(label, 64),
+      'Answering in this chat.',
+      inlineMessage(label, '<i>🤔 Thinking...</i>'),
+    ),
+  )
+  const inlineMessageId = placeholder.inline_message_id
+
+  const editGuest = async (bodyHtml: string) => {
+    await ctx.api
+      .editMessageTextInline(inlineMessageId, inlineMessage(label, bodyHtml), {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[guest] edit failed: ${message}`)
+      })
+  }
+
+  try {
+    const chosenFileId =
+      interaction.imageFileId ?? interaction.replyContext?.imageFileId ?? null
+    const chosenSource: 'trigger' | 'reply' | null = interaction.imageFileId
+      ? 'trigger'
+      : interaction.replyContext?.imageFileId
+        ? 'reply'
+        : null
+    const image = chosenFileId && chosenSource
+      ? await resolveImage(ctx, chosenFileId, chosenSource)
+      : null
+
+    const rawText = (async function* () {
+      let hasText = false
+      for await (const ev of answer(
+        interaction.cleanedText,
+        interaction.replyContext,
+        image,
+      )) {
+        if (ev.kind === 'status' && !hasText) {
+          await editGuest(`<i>${escapeHtml(ev.text)}</i>`)
+        } else if (ev.kind === 'text') {
+          hasText = true
+          yield ev.delta
+        } else if (ev.kind === 'error') {
+          yield `\n\n<i>⚠️ ${escapeHtml(ev.text)}</i>`
+          return
+        }
+      }
+    })()
+
+    let accumulated = ''
+    let lastEditAt = 0
+    for await (const piece of safeHtmlStream(rawText)) {
+      accumulated += piece
+      const now = Date.now()
+      if (now - lastEditAt >= INLINE_EDIT_INTERVAL_MS) {
+        lastEditAt = now
+        await editGuest(`${accumulated} ...`)
+      }
+    }
+
+    await editGuest(accumulated || 'No response.')
+  } catch (error) {
+    console.error('guest query failed:', error)
+    const message = `Sorry, something went wrong: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+    await editGuest(escapeHtml(message))
+  }
+}
+
+bot.use(async (ctx, next) => {
+  const interaction = detectGuestInteraction(ctx.update as GuestUpdate, ctx.me)
+  if (!interaction) {
+    await next()
+    return
+  }
+
+  await handleGuestInteraction(ctx, interaction)
+})
 
 bot.on('inline_query', async (ctx) => {
   const query = ctx.inlineQuery.query.trim()
@@ -411,7 +556,12 @@ process.once('SIGTERM', () => shutdown('SIGTERM'))
 let backoffMs = 2_000
 while (!shuttingDown) {
   currentRunner = run(bot, {
-    runner: { fetch: { allowed_updates: ALLOWED_UPDATES } },
+    runner: {
+      fetch: {
+        // grammY's current generated types predate Bot API 10.0 Guest Mode.
+        allowed_updates: ALLOWED_UPDATES as any,
+      },
+    },
   })
   const task = currentRunner.task()
   try {
