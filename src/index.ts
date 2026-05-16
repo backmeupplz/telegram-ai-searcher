@@ -11,8 +11,16 @@ import {
   type GuestInteraction,
   type GuestUpdate,
 } from './guest'
+import { detectImageSearchIntent } from './image-intent'
+import {
+  imageResultCaption,
+  imageResultsFallbackHtml,
+  MAX_TELEGRAM_IMAGE_RESULTS,
+} from './image-results'
 import { detectTrigger } from './mention'
 import { safeHtmlStream, truncateSafeHtml } from './safe-html'
+import { imageSearch } from './search'
+import type { ImageSearchResult } from './image-search-results'
 
 type AppContext = StreamFlavor<Context>
 
@@ -43,6 +51,7 @@ const START_MESSAGE = `👋 I'm a Telegram bot that answers questions by searchi
 - Fetch and read the top results before replying
 - Stream the answer token-by-token, with inline source links
 - Understand images you send or reply to
+- Find and send image results when you ask for images/photos
 
 <b>How to use me</b>
 - In private chat: just send a question or an image
@@ -83,6 +92,24 @@ function inlineArticle(
   }
 }
 
+function inlinePhoto(
+  id: string,
+  result: ImageSearchResult,
+  index: number,
+  total: number,
+): InlineQueryResult {
+  return {
+    type: 'photo',
+    id,
+    photo_url: result.imageUrl,
+    thumbnail_url: result.thumbnailUrl,
+    title: truncatePlain(result.title, 64),
+    description: result.source,
+    caption: imageResultCaption(result, index, total),
+    parse_mode: 'HTML',
+  } as InlineQueryResult
+}
+
 function truncatePlain(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars - 1)}…` : value
 }
@@ -107,7 +134,8 @@ type SentGuestMessage = {
 async function answerGuestQuery(
   guestQueryId: string,
   result: InlineQueryResult,
-): Promise<SentGuestMessage> {
+  requireEditableMessage = true,
+): Promise<SentGuestMessage | null> {
   const response = await fetch(
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerGuestQuery`,
     {
@@ -122,6 +150,9 @@ async function answerGuestQuery(
     description?: string
   }
   if (!response.ok || !payload.ok || !payload.result?.inline_message_id) {
+    if (!requireEditableMessage && response.ok && payload.ok) {
+      return payload.result ?? null
+    }
     throw new Error(
       payload.description ?? `answerGuestQuery failed with HTTP ${response.status}`,
     )
@@ -150,6 +181,37 @@ async function handleGuestInteraction(
     return
   }
 
+  const imageIntent = detectImageSearchIntent(interaction.cleanedText)
+  if (imageIntent) {
+    const label = `Images: ${imageIntent.query}`
+    console.log(`[guest-image] query="${truncatePlain(imageIntent.query, 80)}"`)
+
+    let bodyHtml: string
+    try {
+      const results = await imageSearch(imageIntent.query)
+      bodyHtml = imageResultsFallbackHtml(imageIntent.query, results)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[guest-image] failed: ${message}`)
+      bodyHtml = `Image search failed: ${escapeHtml(message)}`
+    }
+
+    await answerGuestQuery(
+      interaction.queryId,
+      inlineArticle(
+        `guest-image-${interaction.messageId}`,
+        truncatePlain(label, 64),
+        'Guest Mode image fallback with source links.',
+        inlineMessage(label, bodyHtml),
+      ),
+      false,
+    ).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[guest-image] answer failed: ${message}`)
+    })
+    return
+  }
+
   const label = guestPromptLabel(interaction)
   console.log(`[guest] query="${truncatePlain(label, 80)}"`)
 
@@ -162,6 +224,9 @@ async function handleGuestInteraction(
       inlineMessage(label, '<i>🤔 Thinking...</i>'),
     ),
   )
+  if (!placeholder?.inline_message_id) {
+    throw new Error('answerGuestQuery did not return an editable message id')
+  }
   const inlineMessageId = placeholder.inline_message_id
 
   const editGuest = async (bodyHtml: string) => {
@@ -257,6 +322,52 @@ bot.on('inline_query', async (ctx) => {
     return
   }
 
+  const imageIntent = detectImageSearchIntent(query)
+  if (imageIntent) {
+    console.log(`[inline-image] query="${truncatePlain(imageIntent.query, 80)}"`)
+    try {
+      const results = (await imageSearch(imageIntent.query)).slice(
+        0,
+        MAX_TELEGRAM_IMAGE_RESULTS,
+      )
+      await ctx.answerInlineQuery(
+        results.length > 0
+          ? results.map((result, index) =>
+              inlinePhoto(
+                `image-${ctx.inlineQuery.id}-${index}`,
+                result,
+                index,
+                results.length,
+              ),
+            )
+          : [
+              inlineArticle(
+                'no-image-results',
+                'No image results',
+                `No images found for ${truncatePlain(imageIntent.query, 60)}.`,
+                imageResultsFallbackHtml(imageIntent.query, []),
+              ),
+            ],
+        { cache_time: 60, is_personal: true },
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[inline-image] failed: ${message}`)
+      await ctx.answerInlineQuery(
+        [
+          inlineArticle(
+            'image-search-error',
+            'Image search failed',
+            truncatePlain(message, 80),
+            `Image search failed: ${escapeHtml(message)}`,
+          ),
+        ],
+        { cache_time: 0, is_personal: true },
+      )
+    }
+    return
+  }
+
   await ctx.answerInlineQuery(
     [
       inlineArticle(
@@ -287,6 +398,10 @@ bot.on('chosen_inline_result', async (ctx) => {
     console.warn(
       '[inline] chosen result cannot be edited; enable inline feedback in BotFather and keep the inline keyboard on the placeholder',
     )
+    return
+  }
+  if (detectImageSearchIntent(query)) {
+    console.log('[inline-image] chosen photo result does not need editing')
     return
   }
 
@@ -370,6 +485,29 @@ async function resolveImage(
   }
 }
 
+async function sendImageResults(
+  ctx: AppContext,
+  results: ImageSearchResult[],
+  replyToId: number,
+): Promise<number> {
+  let sent = 0
+  const top = results.slice(0, MAX_TELEGRAM_IMAGE_RESULTS)
+  for (const [index, result] of top.entries()) {
+    try {
+      await ctx.replyWithPhoto(result.imageUrl, {
+        caption: imageResultCaption(result, index, top.length),
+        parse_mode: 'HTML',
+        reply_parameters: sent === 0 ? { message_id: replyToId } : undefined,
+      })
+      sent += 1
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[image-send] failed for ${result.imageUrl}: ${message}`)
+    }
+  }
+  return sent
+}
+
 bot.on('message', async (ctx) => {
   const {
     triggered,
@@ -405,9 +543,61 @@ bot.on('message', async (ctx) => {
         .catch(() => undefined)
     }
   }
+  const finishWithHtml = async (html: string) => {
+    if (statusMsgId === null) {
+      const m = await ctx.reply(html, {
+        parse_mode: 'HTML',
+        reply_parameters: { message_id: replyToId },
+        link_preview_options: { is_disabled: true },
+      })
+      statusMsgId = m.message_id
+    } else {
+      await ctx.api
+        .editMessageText(chatId, statusMsgId, html, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+        })
+        .catch(() => undefined)
+    }
+  }
+  const clearStatus = async () => {
+    if (statusMsgId === null) return
+    await ctx.api.deleteMessage(chatId, statusMsgId).catch(() => undefined)
+    statusMsgId = null
+  }
 
   try {
     await setStatus('🤔 Thinking…')
+
+    const imageIntent = detectImageSearchIntent(cleanedText)
+    if (imageIntent) {
+      await ctx.replyWithChatAction('upload_photo').catch(() => undefined)
+      await setStatus(
+        `🔎 Searching images for "${truncatePlain(imageIntent.query, 80)}"…`,
+      )
+      let results: ImageSearchResult[]
+      try {
+        results = await imageSearch(imageIntent.query)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[image-search] failed: ${message}`)
+        await setStatus(`Image search failed: ${message}`)
+        return
+      }
+
+      if (results.length === 0) {
+        await setStatus(`No image results found for "${imageIntent.query}".`)
+        return
+      }
+
+      const sent = await sendImageResults(ctx, results, replyToId)
+      if (sent > 0) {
+        await clearStatus()
+      } else {
+        await finishWithHtml(imageResultsFallbackHtml(imageIntent.query, results))
+      }
+      return
+    }
 
     const chosenFileId = imageFileId ?? replyImageFileId
     const chosenSource: 'trigger' | 'reply' | null = imageFileId

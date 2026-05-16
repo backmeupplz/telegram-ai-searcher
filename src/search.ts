@@ -1,6 +1,18 @@
 import { JSDOM, VirtualConsole } from 'jsdom'
 import { Readability } from '@mozilla/readability'
 import { env } from './env'
+import {
+  parseImageResults,
+  type ImageSearchResult,
+  type RawImageSearchResult,
+} from './image-search-results'
+
+export {
+  parseImageResults,
+  sanitizeRemoteImageUrl,
+  type ImageSearchResult,
+  type RawImageSearchResult,
+} from './image-search-results'
 
 export type SearchResult = {
   title: string
@@ -78,6 +90,27 @@ async function searxng(query: string): Promise<SearxngRawResult[]> {
   return data.results ?? []
 }
 
+async function searxngImages(query: string): Promise<RawImageSearchResult[]> {
+  const url = new URL(`${env.SEARXNG_URL}/search`)
+  url.searchParams.set('q', query)
+  url.searchParams.set('categories', 'images')
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('safesearch', '1')
+
+  const res = await queryWithTimeout(
+    url.toString(),
+    { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } },
+    FETCH_TIMEOUT_MS,
+  )
+  if (!res.ok) {
+    throw new Error(
+      `SearXNG images ${res.status}: ${await res.text().catch(() => '')}`,
+    )
+  }
+  const data = (await res.json()) as { results?: RawImageSearchResult[] }
+  return data.results ?? []
+}
+
 async function extractReadable(
   url: string,
 ): Promise<{ title: string; content: string }> {
@@ -140,4 +173,8 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
       }
     }),
   )
+}
+
+export async function imageSearch(query: string): Promise<ImageSearchResult[]> {
+  return parseImageResults(await searxngImages(query), env.IMAGE_SEARCH_TOP_N)
 }

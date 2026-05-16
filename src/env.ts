@@ -13,4 +13,5 @@ export const env = {
     '',
   ),
   SEARCH_TOP_N: Number(process.env.SEARCH_TOP_N ?? 3),
+  IMAGE_SEARCH_TOP_N: Number(process.env.IMAGE_SEARCH_TOP_N ?? 6),
 }
