@@ -14,6 +14,7 @@ Telegram bot that answers free-form questions by searching the web and streaming
 - Answers inline queries with a sendable article result
 - Answers Telegram Guest Mode summons with one `answerGuestQuery` reply that is edited while the answer is generated
 - Web search runs against your own SearXNG instance; top N results are fetched and passed through Mozilla Readability before being handed to the model
+- Explicit image requests search SearXNG's image category and send a small set of Telegram photo results with source captions
 - Inline source citations in the answer, with the full URL preserved and only the domain shown as link text
 - HTML responses are gated through a stack-balanced stream so partial tags never hit Telegram's parser mid-draft
 
@@ -60,20 +61,24 @@ bun run start
 | `FIREWORKS_MODEL` | Full Fireworks model id, e.g. `accounts/fireworks/models/qwen3-235b-a22b-instruct` |
 | `SEARXNG_URL` | Base URL of your SearXNG instance (default `http://localhost:8080`) |
 | `SEARCH_TOP_N` | Number of results to fetch and extract per query (default `3`) |
+| `IMAGE_SEARCH_TOP_N` | Number of image results to parse from SearXNG before Telegram delivery filtering (default `6`) |
 
 ## How it works
 
 1. User sends a message. In a group the bot only reacts when `@mentioned` or the message replies to one of its own. Inline queries are handled through Telegram's `inline_query` update, and Guest Mode summons are handled through Telegram Bot API 10.0 `guest_message` updates.
 2. `src/mention.ts` decides whether a normal chat message should trigger a reply. `src/guest.ts` validates guest updates, strips the bot mention, extracts only the summoning/replied-to context Telegram provided, and rate-limits repeated sender/query handling.
 3. A `typing` action fires for normal messages and an italic status message is posted: `🤔 Thinking…`. Guest mode instead sends one immediate `answerGuestQuery` placeholder reply.
-4. The message goes to Fireworks via the Vercel AI SDK, with a single `web_search` tool available.
-5. When the model calls `web_search`, the status edits to `🔎 Searching the web for "<query>"…`; the bot hits SearXNG, fetches the top N URLs, and extracts clean text via [`@mozilla/readability`](https://github.com/mozilla/readability) before returning it.
-6. When tool results land, the status edits to `🧠 Generating response…`.
-7. As soon as the model emits the first text token, private chats use `ctx.replyWithStream`, groups edit the status message into the final answer, inline mode edits the chosen inline message, and Guest Mode edits the single guest reply returned by `answerGuestQuery`.
+4. Explicit image requests such as "show me photos of corgis" bypass the text-answer model path, query SearXNG's image category, sanitize remote image URLs, and send up to three results.
+5. Other messages go to Fireworks via the Vercel AI SDK, with a single `web_search` tool available.
+6. When the model calls `web_search`, the status edits to `🔎 Searching the web for "<query>"…`; the bot hits SearXNG, fetches the top N URLs, and extracts clean text via [`@mozilla/readability`](https://github.com/mozilla/readability) before returning it.
+7. When tool results land, the status edits to `🧠 Generating response…`.
+8. As soon as the model emits the first text token, private chats use `ctx.replyWithStream`, groups edit the status message into the final answer, inline mode edits the chosen inline message, and Guest Mode edits the single guest reply returned by `answerGuestQuery`.
 
 For inline mode, the bot immediately returns a sendable `Thinking...` article. When the user sends it, the message quotes the original prompt and then edits through search/generation updates into the final answer. Telegram only exposes the editable inline message id when inline feedback is enabled and the inline result has an inline keyboard, so the bot attaches a minimal temporary `...` button while working and removes it on the final edit.
 
-For Guest Mode, enable **Guest Mode** in BotFather for the deployed bot. Telegram sends `guest_message` updates only for each summon and includes only the summoning message plus the replied-to message when present. The bot answers with `answerGuestQuery` once, then edits the returned inline message id; it does not assume chat history or send follow-up messages. Bot-originated guest messages are ignored and repeated human summons are rate-limited to reduce loop risk.
+For explicit image requests, private and group chats send photo messages with source captions. Inline mode returns Telegram photo results directly. Guest Mode cannot rely on follow-up media sends, so image requests receive a compact source-link fallback in the single `answerGuestQuery` response.
+
+For Guest Mode, enable **Guest Mode** in BotFather for the deployed bot. Telegram sends `guest_message` updates only for each summon and includes only the summoning message plus the replied-to message when present. The bot answers with `answerGuestQuery` once, then edits the returned inline message id for text answers; it does not assume chat history or send follow-up messages. Bot-originated guest messages are ignored and repeated human summons are rate-limited to reduce loop risk.
 
 ## Deployment
 
