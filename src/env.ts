@@ -4,6 +4,24 @@ const required = (name: string): string => {
   return value
 }
 
+export const optionalPositiveInteger = (
+  name: string,
+  defaultValue: number,
+  maxValue?: number,
+): number => {
+  const raw = process.env[name]
+  if (!raw) return defaultValue
+
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`)
+  }
+  if (maxValue !== undefined && value > maxValue) {
+    throw new Error(`${name} must be at most ${maxValue}`)
+  }
+  return value
+}
+
 export const env = {
   TELEGRAM_BOT_TOKEN: required('TELEGRAM_BOT_TOKEN'),
   FIREWORKS_API_KEY: required('FIREWORKS_API_KEY'),
@@ -14,4 +32,5 @@ export const env = {
   ),
   SEARCH_TOP_N: Number(process.env.SEARCH_TOP_N ?? 3),
   IMAGE_SEARCH_TOP_N: Number(process.env.IMAGE_SEARCH_TOP_N ?? 6),
+  TOOL_STEP_LIMIT: optionalPositiveInteger('TOOL_STEP_LIMIT', 150, 300),
 }
