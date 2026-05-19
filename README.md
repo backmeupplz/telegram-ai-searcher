@@ -62,6 +62,7 @@ bun run start
 | `SEARXNG_URL` | Base URL of your SearXNG instance (default `http://localhost:8080`) |
 | `SEARCH_TOP_N` | Number of results to fetch and extract per query (default `3`) |
 | `IMAGE_SEARCH_TOP_N` | Number of image results to parse from SearXNG before Telegram delivery filtering (default `6`) |
+| `ANSWER_STEP_LIMIT` | Maximum answer-generation tool-call steps before stopping (default `150`, max `300`) |
 
 ## How it works
 

@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { stepCountIs, streamText, tool, type ModelMessage } from 'ai'
 import { z } from 'zod'
+import { noTextAnswerReason } from './answer-limit.ts'
 import { env } from './env'
 import type { ReplyContext } from './mention'
 import { fetchUrl, webSearch } from './search'
@@ -43,8 +44,6 @@ export type BotEvent =
   | { kind: 'status'; text: string }
   | { kind: 'text'; delta: string }
   | { kind: 'error'; text: string }
-
-const STEP_LIMIT = 15
 
 export type ImageInput = {
   url: string
@@ -110,7 +109,7 @@ export async function* answer(
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
-    stopWhen: stepCountIs(STEP_LIMIT),
+    stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
     tools: {
       web_search: tool({
         description:
@@ -228,21 +227,15 @@ export async function* answer(
 
   if (!hasEmittedText) {
     console.log(
-      `[answer] no text emitted. steps=${stepCount}/${STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
+      `[answer] no text emitted. steps=${stepCount}/${env.ANSWER_STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
     )
-    let reason: string
-    if (finishReason === 'tool-calls' && stepCount >= STEP_LIMIT) {
-      reason = `Hit the ${STEP_LIMIT}-step tool-call limit before the model produced an answer. Try a narrower question or ask me to summarise what I already found.`
-    } else if (finishReason === 'length') {
-      reason =
-        'The model hit its output token limit before producing any text.'
-    } else if (finishReason === 'content-filter') {
-      reason = 'The response was blocked by the content filter.'
-    } else if (finishReason && finishReason !== 'stop') {
-      reason = `The model stopped without replying (reason: ${finishReason}).`
-    } else {
-      reason = 'The model returned no text.'
+    yield {
+      kind: 'error',
+      text: noTextAnswerReason(
+        finishReason,
+        stepCount,
+        env.ANSWER_STEP_LIMIT,
+      ),
     }
-    yield { kind: 'error', text: reason }
   }
 }
