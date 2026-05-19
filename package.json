@@ -11,7 +11,7 @@
     "start": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:updates": "node --experimental-strip-types --test src/guest.test.ts src/image-intent.test.ts src/image-results.test.ts src/search.test.ts src/mention.test.ts"
+    "test:updates": "node --experimental-strip-types --test src/guest.test.ts src/image-intent.test.ts src/image-results.test.ts src/search.test.ts src/mention.test.ts src/env.test.ts src/ai.test.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
