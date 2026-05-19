@@ -1,9 +1,9 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { stepCountIs, streamText, tool, type ModelMessage } from 'ai'
 import { z } from 'zod'
+import { noTextAnswerReason } from './answer-limit.ts'
 import { env } from './env'
 import type { ReplyContext } from './mention'
-import { noTextReason } from './no-text-reason'
 import { fetchUrl, webSearch } from './search'
 
 const fireworks = createOpenAICompatible({
@@ -44,8 +44,6 @@ export type BotEvent =
   | { kind: 'status'; text: string }
   | { kind: 'text'; delta: string }
   | { kind: 'error'; text: string }
-
-const STEP_LIMIT = env.TOOL_STEP_LIMIT
 
 export type ImageInput = {
   url: string
@@ -111,7 +109,7 @@ export async function* answer(
     model: fireworks(env.FIREWORKS_MODEL),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
-    stopWhen: stepCountIs(STEP_LIMIT),
+    stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
     tools: {
       web_search: tool({
         description:
@@ -229,11 +227,15 @@ export async function* answer(
 
   if (!hasEmittedText) {
     console.log(
-      `[answer] no text emitted. steps=${stepCount}/${STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
+      `[answer] no text emitted. steps=${stepCount}/${env.ANSWER_STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
     )
     yield {
       kind: 'error',
-      text: noTextReason(finishReason, stepCount, STEP_LIMIT),
+      text: noTextAnswerReason(
+        finishReason,
+        stepCount,
+        env.ANSWER_STEP_LIMIT,
+      ),
     }
   }
 }
