@@ -8,7 +8,7 @@ import { fetchUrl, webSearch } from './search'
 
 const fireworks = createOpenAICompatible({
   name: 'fireworks',
-  baseURL: 'https://api.fireworks.ai/inference/v1',
+  baseURL: env.LLM_BASE_URL,
   apiKey: env.FIREWORKS_API_KEY,
 })
 
