@@ -105,8 +105,11 @@ export async function* answer(
   replyContext: ReplyContext | null = null,
   image: ImageInput | null = null,
 ): AsyncGenerator<BotEvent> {
+  // Only the vision-capable model can read images; use the default (better at
+  // text/tools) for everything else.
+  const modelId = image ? env.FIREWORKS_VISION_MODEL : env.FIREWORKS_MODEL
   const result = streamText({
-    model: fireworks(env.FIREWORKS_MODEL),
+    model: fireworks(modelId),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
     stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
