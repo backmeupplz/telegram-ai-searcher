@@ -60,7 +60,7 @@ const START_MESSAGE = `👋 I'm a Telegram bot that answers questions by searchi
 - Reply to any message with a question and I'll use it as context
 - Write in any language — I'll reply in the same one
 
-I am <b>not</b> ChatGPT, Claude, Gemini, or any other specific assistant — I'm a thin wrapper around whatever open model is configured on the server (currently via Fireworks AI). Source: <a href="https://github.com/backmeupplz/telegram-ai-searcher">github.com/backmeupplz/telegram-ai-searcher</a>`
+I am <b>not</b> ChatGPT, Claude, Gemini, or any other specific assistant — I'm a thin wrapper around whatever open model is configured on the server. Source: <a href="https://github.com/backmeupplz/telegram-ai-searcher">github.com/backmeupplz/telegram-ai-searcher</a>`
 
 bot.command('start', async (ctx) => {
   await ctx

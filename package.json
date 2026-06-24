@@ -1,7 +1,7 @@
 {
   "name": "telegram-ai-searcher",
   "version": "0.1.0",
-  "description": "Telegram bot that answers questions with Fireworks AI + self-hosted SearXNG web search, streaming the reply live via grammY.",
+  "description": "Telegram bot that answers questions with an OpenAI-compatible LLM and self-hosted SearXNG web search, streaming the reply live via grammY.",
   "module": "src/index.ts",
   "type": "module",
   "repository": "https://github.com/backmeupplz/telegram-ai-searcher",

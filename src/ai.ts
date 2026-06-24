@@ -6,10 +6,10 @@ import { env } from './env'
 import type { ReplyContext } from './mention'
 import { fetchUrl, webSearch } from './search'
 
-const fireworks = createOpenAICompatible({
-  name: 'fireworks',
+const llm = createOpenAICompatible({
+  name: 'llm',
   baseURL: env.LLM_BASE_URL,
-  apiKey: env.FIREWORKS_API_KEY,
+  apiKey: env.LLM_API_KEY,
 })
 
 const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat. The current date is ${new Date().toISOString().slice(0, 10)}.
@@ -107,9 +107,9 @@ export async function* answer(
 ): AsyncGenerator<BotEvent> {
   // Only the vision-capable model can read images; use the default (better at
   // text/tools) for everything else.
-  const modelId = image ? env.FIREWORKS_VISION_MODEL : env.FIREWORKS_MODEL
+  const modelId = image ? env.LLM_VISION_MODEL : env.LLM_MODEL
   const result = streamText({
-    model: fireworks(modelId),
+    model: llm(modelId),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
     stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
