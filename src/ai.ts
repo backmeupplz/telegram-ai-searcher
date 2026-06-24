@@ -12,6 +12,10 @@ const llm = createOpenAICompatible({
   apiKey: env.LLM_API_KEY,
 })
 
+const llmProviderOptions = env.LLM_BASE_URL.includes('openrouter.ai')
+  ? { llm: { reasoning: { enabled: false } } }
+  : undefined
+
 const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat. The current date is ${new Date().toISOString().slice(0, 10)}.
 
 Your training data is MONTHS OR YEARS old. You MUST use the web_search tool for ANY question that involves:
@@ -112,6 +116,7 @@ export async function* answer(
     model: llm(modelId),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
+    providerOptions: llmProviderOptions,
     stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
     tools: {
       web_search: tool({
