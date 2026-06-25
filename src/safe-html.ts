@@ -148,8 +148,14 @@ export async function* safeHtmlStream(
   source: AsyncIterable<string>,
 ): AsyncGenerator<string> {
   let pending = ''
+  let trimmingLeadingWhitespace = true
   for await (const chunk of source) {
     pending += chunk
+    if (trimmingLeadingWhitespace) {
+      pending = pending.trimStart()
+      if (!pending) continue
+      trimmingLeadingWhitespace = false
+    }
     const n = safePrefixLen(pending)
     if (n > 0) {
       yield escapeUnsupportedTags(pending.slice(0, n))
