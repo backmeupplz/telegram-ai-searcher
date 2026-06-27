@@ -26,30 +26,104 @@ function tagName(inner: string): string {
   return trimmed.replace(/\/$/, '').trim().split(/\s/)[0]?.toLowerCase() ?? ''
 }
 
+function findNextTagStart(s: string, start: number): number {
+  let lt = s.indexOf('<', start)
+  while (lt !== -1) {
+    if (/[A-Za-z/]/.test(s[lt + 1] ?? '')) return lt
+    lt = s.indexOf('<', lt + 1)
+  }
+  return -1
+}
+
 function escapeUnsupportedTags(s: string): string {
   let out = ''
   let pos = 0
   while (pos < s.length) {
-    const lt = s.indexOf('<', pos)
+    const lt = findNextTagStart(s, pos)
     if (lt === -1) {
-      out += s.slice(pos)
+      out += renderMarkdownText(s.slice(pos))
       break
     }
-    out += s.slice(pos, lt)
+    out += renderMarkdownText(s.slice(pos, lt))
     const gt = s.indexOf('>', lt)
     if (gt === -1) {
-      out += s.slice(lt).replace(/</g, '&lt;')
+      out += escapeHtmlText(s.slice(lt))
       break
     }
     const inner = s.slice(lt + 1, gt).trim()
     if (ALLOWED_TAGS.has(tagName(inner))) {
       out += s.slice(lt, gt + 1)
     } else {
-      out += `&lt;${s.slice(lt + 1, gt)}&gt;`
+      out += escapeHtmlText(s.slice(lt, gt + 1))
     }
     pos = gt + 1
   }
   return out
+}
+
+function escapeHtmlText(s: string): string {
+  return s
+    .replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);)/gi, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function escapeHtmlAttribute(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function isSafeHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function renderMarkdownText(s: string): string {
+  const replacements: string[] = []
+  const stash = (html: string) => {
+    const token = `\u0000${replacements.length}\u0000`
+    replacements.push(html)
+    return token
+  }
+
+  let text = s
+
+  text = text.replace(/(^|\n)#{1,6}[ \t]+([^\n]+)/g, (_, prefix, heading) => {
+    return `${prefix}${stash(`<b>${escapeHtmlText(heading.trim())}</b>`)}`
+  })
+
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    return stash(`<code>${escapeHtmlText(code)}</code>`)
+  })
+
+  text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/gi, (match, label, url) => {
+    if (!isSafeHttpUrl(url)) return match
+    return stash(
+      `<a href="${escapeHtmlAttribute(url)}">${escapeHtmlText(label)}</a>`,
+    )
+  })
+
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, (_, body) => {
+    return stash(`<b>${escapeHtmlText(body)}</b>`)
+  })
+
+  text = text.replace(
+    /(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?=$|[^\w*])/g,
+    (_, prefix, body) => `${prefix}${stash(`<i>${escapeHtmlText(body)}</i>`)}`,
+  )
+
+  let html = escapeHtmlText(text)
+  for (const [index, replacement] of replacements.entries()) {
+    html = html.replaceAll(`\u0000${index}\u0000`, replacement)
+  }
+  return html
 }
 
 type TagStep = {
@@ -59,7 +133,7 @@ type TagStep = {
 }
 
 function parseNextTag(s: string, start: number, stack: string[]): TagStep {
-  const lt = s.indexOf('<', start)
+  const lt = findNextTagStart(s, start)
   if (lt === -1) {
     return { stack, cursor: s.length, aborted: false }
   }
@@ -90,7 +164,7 @@ function safePrefixLen(s: string): number {
   let safe = 0
   while (pos < s.length) {
     if (stack.length === 0) {
-      const lt = s.indexOf('<', pos)
+      const lt = findNextTagStart(s, pos)
       safe = lt === -1 ? s.length : lt
     }
     const step = parseNextTag(s, pos, stack)
@@ -109,7 +183,9 @@ function closeOpenTags(s: string): string {
   while (pos < output.length) {
     const step = parseNextTag(output, pos, stack)
     if (step.aborted) {
-      output = output.slice(0, step.cursor)
+      if (output.indexOf('>', step.cursor) !== -1) {
+        output = output.slice(0, step.cursor)
+      }
       break
     }
     stack = step.stack
@@ -123,6 +199,49 @@ function trimDanglingEntity(s: string): string {
   if (amp === -1) return s
   const tail = s.slice(amp)
   return tail.includes(';') ? s : s.slice(0, amp)
+}
+
+function markdownSafePrefixLen(s: string, limit: number): number {
+  let codeStart: number | null = null
+  let boldStart: number | null = null
+  let pos = 0
+
+  while (pos < limit) {
+    const char = s[pos]
+
+    if (char === '`') {
+      codeStart = codeStart === null ? pos : null
+      pos += 1
+      continue
+    }
+
+    if (codeStart !== null) {
+      pos += 1
+      continue
+    }
+
+    if (s.startsWith('**', pos)) {
+      boldStart = boldStart === null ? pos : null
+      pos += 2
+      continue
+    }
+
+    pos += 1
+  }
+
+  if (codeStart !== null) return codeStart
+  if (boldStart !== null) return boldStart
+
+  const linkStart = s.lastIndexOf('[', limit - 1)
+  if (linkStart !== -1) {
+    const linkMiddle = s.indexOf('](', linkStart)
+    const linkEnd = linkMiddle === -1 ? -1 : s.indexOf(')', linkMiddle + 2)
+    if (linkMiddle !== -1 && (linkEnd === -1 || linkEnd >= limit)) {
+      return linkStart
+    }
+  }
+
+  return limit
 }
 
 export function truncateSafeHtml(
@@ -157,9 +276,10 @@ export async function* safeHtmlStream(
       trimmingLeadingWhitespace = false
     }
     const n = safePrefixLen(pending)
-    if (n > 0) {
-      yield escapeUnsupportedTags(pending.slice(0, n))
-      pending = pending.slice(n)
+    const m = markdownSafePrefixLen(pending, n)
+    if (m > 0) {
+      yield escapeUnsupportedTags(pending.slice(0, m))
+      pending = pending.slice(m)
     }
   }
   if (pending) yield escapeUnsupportedTags(closeOpenTags(pending))
