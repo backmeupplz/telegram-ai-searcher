@@ -12,9 +12,22 @@ const llm = createOpenAICompatible({
   apiKey: env.LLM_API_KEY,
 })
 
-const llmProviderOptions = env.LLM_BASE_URL.includes('openrouter.ai')
-  ? { llm: { reasoning: { enabled: false } } }
-  : undefined
+const OPENROUTER_REASONING_REQUIRED_MODELS = [
+  /^openai\/gpt-oss-/,
+  /^liquid\/.+thinking/,
+]
+
+function providerOptionsForModel(modelId: string) {
+  if (!env.LLM_BASE_URL.includes('openrouter.ai')) return undefined
+  if (
+    OPENROUTER_REASONING_REQUIRED_MODELS.some((pattern) =>
+      pattern.test(modelId),
+    )
+  ) {
+    return undefined
+  }
+  return { llm: { reasoning: { enabled: false } } }
+}
 
 const SYSTEM_PROMPT = `You are a helpful assistant running inside a Telegram chat. The current date is ${new Date().toISOString().slice(0, 10)}.
 
@@ -57,6 +70,10 @@ export type ImageInput = {
 
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value
+}
+
+function hasMeaningfulText(value: string): boolean {
+  return value.replace(/<\|[^|]+?\|>/g, '').trim().length > 0
 }
 
 function buildMessages(
@@ -104,19 +121,24 @@ function buildMessages(
   return [{ role: 'user', content: parts }]
 }
 
-export async function* answer(
+type AttemptOutcome = {
+  ok: boolean
+  reason: string
+}
+
+async function* answerWithModel(
+  modelId: string,
   question: string,
-  replyContext: ReplyContext | null = null,
-  image: ImageInput | null = null,
-): AsyncGenerator<BotEvent> {
-  // Only the vision-capable model can read images; use the default (better at
-  // text/tools) for everything else.
-  const modelId = image ? env.LLM_VISION_MODEL : env.LLM_MODEL
+  replyContext: ReplyContext | null,
+  image: ImageInput | null,
+): AsyncGenerator<BotEvent, AttemptOutcome> {
+  console.log(`[model] trying ${modelId}`)
   const result = streamText({
     model: llm(modelId),
     system: SYSTEM_PROMPT,
     messages: buildMessages(question, replyContext, image),
-    providerOptions: llmProviderOptions,
+    providerOptions: providerOptionsForModel(modelId),
+    maxRetries: 0,
     stopWhen: stepCountIs(env.ANSWER_STEP_LIMIT),
     tools: {
       web_search: tool({
@@ -176,7 +198,7 @@ export async function* answer(
   const escapeHtml = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-  let hasEmittedText = false
+  let hasAnswerText = false
   let stepCount = 0
   let finishReason: string | null = null
   let stepLabels: Array<{ icon: string; text: string }> = []
@@ -185,7 +207,7 @@ export async function* answer(
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'start-step') {
       stepCount += 1
-      if (hasEmittedText && stepLabels.length > 0) {
+      if (hasAnswerText && stepLabels.length > 0) {
         pendingSeparatorLabels = stepLabels
       }
       stepLabels = []
@@ -195,9 +217,12 @@ export async function* answer(
     } else if (chunk.type === 'error') {
       const err = (chunk as { error: unknown }).error
       const message = err instanceof Error ? err.message : String(err)
-      console.log(`[stream] ERROR: ${message}`)
-      yield { kind: 'error', text: `Stream error: ${message}` }
-      return
+      console.log(`[stream] ${modelId} ERROR: ${message}`)
+      if (hasAnswerText) {
+        yield { kind: 'error', text: `Stream error: ${message}` }
+        return { ok: true, reason: 'errored after text' }
+      }
+      return { ok: false, reason: `stream error: ${message}` }
     } else if (chunk.type === 'tool-call' && chunk.toolName === 'web_search') {
       const query =
         (chunk as unknown as { input?: { query?: string } }).input?.query ?? ''
@@ -221,29 +246,59 @@ export async function* answer(
     } else if (chunk.type === 'tool-result') {
       yield { kind: 'status', text: '🧠 Generating response…' }
     } else if (chunk.type === 'text-delta') {
-      if (pendingSeparatorLabels) {
-        const list = pendingSeparatorLabels
-          .map((l) => `${l.icon} ${escapeHtml(l.text)}`)
-          .join(', ')
-        yield { kind: 'text', delta: `\n\n<i>${list}</i>\n\n` }
-        pendingSeparatorLabels = null
+      if (hasMeaningfulText(chunk.text)) {
+        if (pendingSeparatorLabels) {
+          const list = pendingSeparatorLabels
+            .map((l) => `${l.icon} ${escapeHtml(l.text)}`)
+            .join(', ')
+          yield { kind: 'text', delta: `\n\n<i>${list}</i>\n\n` }
+          pendingSeparatorLabels = null
+        }
+        hasAnswerText = true
       }
       yield { kind: 'text', delta: chunk.text }
-      hasEmittedText = true
     }
   }
 
-  if (!hasEmittedText) {
-    console.log(
-      `[answer] no text emitted. steps=${stepCount}/${env.ANSWER_STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
+  if (!hasAnswerText) {
+    const reason = noTextAnswerReason(
+      finishReason,
+      stepCount,
+      env.ANSWER_STEP_LIMIT,
     )
-    yield {
-      kind: 'error',
-      text: noTextAnswerReason(
-        finishReason,
-        stepCount,
-        env.ANSWER_STEP_LIMIT,
-      ),
-    }
+    console.log(
+      `[answer] ${modelId} no text emitted. steps=${stepCount}/${env.ANSWER_STEP_LIMIT} finishReason=${finishReason ?? 'none'}`,
+    )
+    return { ok: false, reason }
   }
+
+  return { ok: true, reason: 'answered' }
+}
+
+export async function* answer(
+  question: string,
+  replyContext: ReplyContext | null = null,
+  image: ImageInput | null = null,
+): AsyncGenerator<BotEvent> {
+  // Only the vision-capable model can read images; use the default (better at
+  // text/tools) for everything else.
+  const modelIds = image ? [env.LLM_VISION_MODEL] : env.LLM_TEXT_MODELS
+  const failures: string[] = []
+
+  for (const [index, modelId] of modelIds.entries()) {
+    if (index > 0) {
+      yield { kind: 'status', text: '🔁 Trying another model…' }
+    }
+    const outcome = yield* answerWithModel(
+      modelId,
+      question,
+      replyContext,
+      image,
+    )
+    if (outcome.ok) return
+    failures.push(`${modelId}: ${outcome.reason}`)
+    console.log(`[model] ${modelId} failed: ${outcome.reason}`)
+  }
+
+  yield { kind: 'error', text: `All configured models failed: ${failures[0]}` }
 }

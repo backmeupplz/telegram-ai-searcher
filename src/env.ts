@@ -6,13 +6,26 @@ const required = (name: string): string => {
   return value
 }
 
+const parseCsv = (value: string | undefined): string[] =>
+  (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+const unique = (values: string[]): string[] => [...new Set(values)]
+
+const LLM_MODEL = required('LLM_MODEL')
+const LLM_MODEL_FALLBACKS = parseCsv(process.env.LLM_MODEL_FALLBACKS)
+
 export const env = {
   TELEGRAM_BOT_TOKEN: required('TELEGRAM_BOT_TOKEN'),
   LLM_API_KEY: required('LLM_API_KEY'),
-  LLM_MODEL: required('LLM_MODEL'),
+  LLM_MODEL,
+  LLM_MODEL_FALLBACKS,
+  LLM_TEXT_MODELS: unique([LLM_MODEL, ...LLM_MODEL_FALLBACKS]),
   // Vision-capable model, used only when the request includes an image.
   // LLM_MODEL stays the default for text/tool work.
-  LLM_VISION_MODEL: process.env.LLM_VISION_MODEL ?? required('LLM_MODEL'),
+  LLM_VISION_MODEL: process.env.LLM_VISION_MODEL ?? LLM_MODEL,
   LLM_BASE_URL: required('LLM_BASE_URL').replace(/\/+$/, ''),
   SEARXNG_URL: (process.env.SEARXNG_URL ?? 'http://localhost:8080').replace(
     /\/+$/,
