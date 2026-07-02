@@ -60,6 +60,7 @@ bun run start
 | `LLM_API_KEY` | OpenAI-compatible LLM API key |
 | `LLM_BASE_URL` | OpenAI-compatible base URL |
 | `LLM_MODEL` | Model id for text/tool responses |
+| `LLM_MODEL_FALLBACKS` | Optional comma-separated text model ids tried after `LLM_MODEL` when a model errors or produces no answer |
 | `LLM_VISION_MODEL` | Optional model id for image understanding (defaults to `LLM_MODEL`) |
 | `SEARXNG_URL` | Base URL of your SearXNG instance (default `http://localhost:8080`) |
 | `SEARCH_TOP_N` | Number of results to fetch and extract per query (default `3`) |
@@ -72,7 +73,7 @@ bun run start
 2. `src/mention.ts` decides whether a normal chat message should trigger a reply. `src/guest.ts` validates guest updates, strips the bot mention, extracts only the summoning/replied-to context Telegram provided, and rate-limits repeated sender/query handling.
 3. A `typing` action fires for normal messages and an italic status message is posted: `🤔 Thinking…`. Guest mode instead sends one immediate `answerGuestQuery` placeholder reply.
 4. Explicit image requests such as "show me photos of corgis" bypass the text-answer model path, query SearXNG's image category, sanitize remote image URLs, and send up to three results.
-5. Other messages go to the configured LLM via the Vercel AI SDK, with a single `web_search` tool available.
+5. Other messages go to the configured LLM via the Vercel AI SDK, with a single `web_search` tool available. If `LLM_MODEL_FALLBACKS` is set, the bot tries those text models in order when the current model errors or finishes without a meaningful answer.
 6. When the model calls `web_search`, the status edits to `🔎 Searching the web for "<query>"…`; the bot hits SearXNG, fetches the top N URLs, and extracts clean text via [`@mozilla/readability`](https://github.com/mozilla/readability) before returning it.
 7. When tool results land, the status edits to `🧠 Generating response…`.
 8. As soon as the model emits the first text token, private chats use `ctx.replyWithStream`, groups edit the status message into the final answer, inline mode edits the chosen inline message, and Guest Mode edits the single guest reply returned by `answerGuestQuery`.
