@@ -1,0 +1,41 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  check:
+    # Our own PRs and pushes run on the Mac runners; outsiders' PRs (AGit via the github bot) on Linux
+    runs-on: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["backmeupplz","renovate","claude"]'), github.event.pull_request.user.login)) && 'macos-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Production's Bun (nixpacks.toml) on Linux; the Mac uses Homebrew's bun
+      - if: runner.os == 'Linux'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # The tests run on Node (test:updates, node --test with type stripping); the Mac has Homebrew Node
+      - if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Linux caches node_modules (a hit skips the install); on the Mac bun's global cache persists
+      - id: modules
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: modules-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: bun install --frozen-lockfile
+      # Typecheck and tests in parallel; either failing fails the step
+      - run: |
+          bun run typecheck &
+          bun run test:updates &
+          for job in $(jobs -p); do wait $job || exit 1; done
