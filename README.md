@@ -93,6 +93,8 @@ nixpacks build . --name telegram-ai-searcher
 docker run --env-file .env telegram-ai-searcher
 ```
 
+Production builds the `Dockerfile` instead (Bun 1.4.4, dependencies cached in their own layer): `docker build -t telegram-ai-searcher .`
+
 ## License
 
 MIT
