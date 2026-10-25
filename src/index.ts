@@ -20,6 +20,7 @@ import {
 import { detectTrigger } from './mention'
 import { safeHtmlStream, truncateSafeHtml } from './safe-html'
 import { imageSearch } from './search'
+import { pollWithHandover } from './handover'
 import type { ImageSearchResult } from './image-search-results'
 
 type AppContext = StreamFlavor<Context>
@@ -27,6 +28,12 @@ type AppContext = StreamFlavor<Context>
 const bot = new Bot<AppContext>(env.TELEGRAM_BOT_TOKEN)
 
 bot.api.config.use(autoRetry())
+// The newest update fetched, confirmed on shutdown so the next poller does not get it again
+let lastUpdate = 0
+bot.use((ctx, next) => {
+  lastUpdate = Math.max(lastUpdate, ctx.update.update_id)
+  return next()
+})
 bot.use(stream())
 
 const GROUP_EDIT_INTERVAL_MS = 1500
@@ -727,40 +734,48 @@ console.log(`telegram-ai-searcher online as @${bot.botInfo.username}`)
 let shuttingDown = false
 let currentRunner: RunnerHandle | null = null
 
-const shutdown = async (signal: string) => {
-  if (shuttingDown) return
-  shuttingDown = true
-  console.log(`received ${signal}, stopping runner…`)
-  if (currentRunner?.isRunning()) {
-    await currentRunner.stop().catch(() => undefined)
-  }
-  process.exit(0)
-}
-process.once('SIGINT', () => shutdown('SIGINT'))
-process.once('SIGTERM', () => shutdown('SIGTERM'))
-
 // Telegram returns 409 Conflict while another getUpdates session is still held
 // open on their side — typically for ~50s after a redeploy. grammY's runner
 // treats 409 as unrecoverable and rejects its task, so we wrap it in a restart
 // loop with backoff instead of letting the process exit.
-let backoffMs = 2_000
-while (!shuttingDown) {
-  currentRunner = run(bot, {
-    runner: {
-      fetch: {
-        // grammY's current generated types predate Bot API 10.0 Guest Mode.
-        allowed_updates: ALLOWED_UPDATES as any,
+const poll = async () => {
+  let backoffMs = 2_000
+  while (!shuttingDown) {
+    currentRunner = run(bot, {
+      runner: {
+        fetch: {
+          // grammY's current generated types predate Bot API 10.0 Guest Mode.
+          allowed_updates: ALLOWED_UPDATES as any,
+        },
       },
-    },
-  })
-  const task = currentRunner.task()
-  try {
-    if (task) await task
-    backoffMs = 2_000
-  } catch (err) {
-    console.error('[runner] crashed, will restart:', err)
+    })
+    const task = currentRunner.task()
+    try {
+      if (task) await task
+      backoffMs = 2_000
+    } catch (err) {
+      console.error('[runner] crashed, will restart:', err)
+    }
+    if (shuttingDown) break
+    await new Promise((r) => setTimeout(r, backoffMs))
+    backoffMs = Math.min(backoffMs * 2, 60_000)
   }
-  if (shuttingDown) break
-  await new Promise((r) => setTimeout(r, backoffMs))
-  backoffMs = Math.min(backoffMs * 2, 60_000)
 }
+
+await pollWithHandover(
+  poll,
+  async () => {
+    console.log('stopping runner…')
+    shuttingDown = true
+    await currentRunner?.stop()
+    // The runner does not confirm on stop: a zero-timeout getUpdates confirms
+    // every update fetched so far, so the next poller does not get them again
+    if (lastUpdate) {
+      await bot.api.getUpdates({ offset: lastUpdate + 1, limit: 1, timeout: 0 })
+    }
+  },
+  async () => {
+    // Answers still streaming
+    while (currentRunner?.size()) await new Promise((r) => setTimeout(r, 100))
+  },
+)
