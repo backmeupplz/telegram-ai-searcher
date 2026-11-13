@@ -40,6 +40,8 @@ const GROUP_EDIT_INTERVAL_MS = 1500
 const GROUP_MIN_FIRST_EDIT_CHARS = 15
 const INLINE_EDIT_INTERVAL_MS = 1500
 const TELEGRAM_TEXT_MAX_CHARS = 4096
+const OWNER_ID = 76104711
+const NOT_OWNER_TEXT = 'I only reply to @borodutch'
 const ALLOWED_UPDATES = [
   'message',
   'guest_message',
@@ -187,6 +189,14 @@ async function handleGuestInteraction(
     console.warn(`[guest] skipped ${interaction.queryId}: ${decision.reason}`)
     return
   }
+  if (interaction.senderId !== OWNER_ID) {
+    await answerGuestQuery(
+      interaction.queryId,
+      inlineArticle(`guest-${interaction.messageId}`, NOT_OWNER_TEXT, '', NOT_OWNER_TEXT),
+      false,
+    ).catch(() => undefined)
+    return
+  }
 
   const imageIntent = detectImageSearchIntent(interaction.cleanedText)
   if (imageIntent) {
@@ -314,6 +324,14 @@ bot.on('inline_query', async (ctx) => {
   const query = ctx.inlineQuery.query.trim()
   console.log(`[inline] query="${truncatePlain(query, 80)}"`)
 
+  if (ctx.from.id !== OWNER_ID) {
+    await ctx.answerInlineQuery(
+      [inlineArticle('owner-only', NOT_OWNER_TEXT, '', NOT_OWNER_TEXT)],
+      { cache_time: 300, is_personal: true },
+    )
+    return
+  }
+
   if (!query) {
     await ctx.answerInlineQuery(
       [
@@ -398,6 +416,7 @@ bot.on('callback_query:data', async (ctx) => {
 bot.on('chosen_inline_result', async (ctx) => {
   const query = ctx.chosenInlineResult.query.trim()
   const inlineMessageId = ctx.chosenInlineResult.inline_message_id
+  if (ctx.from.id !== OWNER_ID) return
   console.log(
     `[inline] chosen result query="${truncatePlain(query, 80)}" editable=${Boolean(inlineMessageId)}`,
   )
@@ -523,6 +542,14 @@ bot.on('message', async (ctx) => {
     imageFileId,
   } = detectTrigger(ctx)
   if (!triggered) return
+  if (ctx.from.id !== OWNER_ID) {
+    await ctx
+      .reply(NOT_OWNER_TEXT, {
+        reply_parameters: { message_id: ctx.message.message_id },
+      })
+      .catch(() => undefined)
+    return
+  }
   const replyImageFileId = replyContext?.imageFileId ?? null
   if (!cleanedText && !imageFileId && !replyImageFileId) return
 
